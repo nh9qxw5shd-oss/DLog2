@@ -67,7 +67,7 @@ const SKIP_TITLE_PATTERNS = [
 // Matches mammoth's markdown table output exactly:
 // | Title | **Location:** | **Incident 3173890 ** | 05/12/2025 15:00 |
 
-const INCIDENT_HEADER = /^\| (.+?) \| \*\*Location:\*\* \| \*\*Incident \*\*(\d+) \*\* \*\* \| ([\d\/]+ [\d:]+) \|$/
+const INCIDENT_HEADER = /^\|\s*(.+?)\s*\|\s*\*\*Location:\*\*\s*\|\s*\*\*Incident\s+(\d+)\s*\*\*\s*\|\s*([\d\/]+ [\d:]+)\s*\|$/i
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

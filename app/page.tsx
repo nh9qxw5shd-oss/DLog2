@@ -105,16 +105,39 @@ function UploadStep({ onComplete }: {
   const [error, setError]       = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const htmlToTableText = useCallback((html: string): string => {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const lines: string[] = []
+
+    doc.querySelectorAll('tr').forEach((row) => {
+      const cells = Array.from(row.querySelectorAll('th,td'))
+      if (!cells.length) return
+      const values = cells.map((cell) => {
+        const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
+        const hasBold = !!cell.querySelector('strong, b')
+        return hasBold && text ? `**${text}**` : text
+      })
+      lines.push(`| ${values.join(' | ')} |`)
+    })
+
+    return lines.join('\n')
+  }, [])
+
   const process = useCallback(async (f: File) => {
     setFile(f); setError(''); setParsing(true); setProgress('Reading DOCX…')
     try {
       const mammoth    = await import('mammoth')
       const buf        = await f.arrayBuffer()
-      const { value: rawText } = await mammoth.extractRawText({ arrayBuffer: buf })
+      const [{ value: htmlText }, { value: rawText }] = await Promise.all([
+        mammoth.convertToHtml({ arrayBuffer: buf }),
+        mammoth.extractRawText({ arrayBuffer: buf }),
+      ])
+      const tableText = htmlText ? htmlToTableText(htmlText) : ''
+      const parseSource = tableText.trim() ? tableText : rawText
       setProgress('Parsing incidents…')
-      const { period, date } = extractPeriod(rawText)
-      const createdBy  = extractCreatedBy(rawText)
-      const incidents  = parseCCILText(rawText)
+      const { period, date } = extractPeriod(rawText || parseSource)
+      const createdBy  = extractCreatedBy(rawText || parseSource)
+      const incidents  = parseCCILText(parseSource)
       setProgress(`Done — ${incidents.length} incidents extracted`)
       onComplete({ period, date, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {
@@ -122,7 +145,7 @@ function UploadStep({ onComplete }: {
       setParsing(false)
       setProgress('')
     }
-  }, [onComplete])
+  }, [htmlToTableText, onComplete])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false)
@@ -211,7 +234,7 @@ function RosterStep({ log, onChange, onNext, onBack }: {
     onChange({ roster: r })
   }
 
-  const ShiftTable = ({ shift, label }: { shift: 'dayShift' | 'nightShift'; label: string }) => (
+  const renderShiftTable = (shift: 'dayShift' | 'nightShift', label: string) => (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-[#4A6FA5] uppercase tracking-wider">{label}</h3>
@@ -285,8 +308,8 @@ function RosterStep({ log, onChange, onNext, onBack }: {
         </div>
       </div>
 
-      <ShiftTable shift="dayShift"   label="◑  Day Shift" />
-      <ShiftTable shift="nightShift" label="◐  Night Shift" />
+      {renderShiftTable('dayShift', '◑  Day Shift')}
+      {renderShiftTable('nightShift', '◐  Night Shift')}
 
       <div className="flex gap-3 pt-2">
         <button onClick={onBack} className="px-6 py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">
