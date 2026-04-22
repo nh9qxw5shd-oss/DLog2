@@ -17,6 +17,7 @@ const C: Record<string, RGB> = {
   lightGray:[220, 225, 232],
   midGray:  [160, 175, 195],
   darkGray: [ 44,  62,  80],
+  black:    [ 22,  28,  36],
   pageBg:   [248, 249, 252],
 }
 
@@ -87,7 +88,7 @@ export async function generatePDF(log: LogState): Promise<void> {
     sfc(C.navy); rc(0, 0, W, 14)
     sfc(C.orange); rc(0, 14, W, 2)
     sf('bold', 8); stc(C.white); tx('EMCC DAILY OPERATIONS REPORT', M, 9)
-    sf('normal', 7); stc(C.steel)
+    sf('normal', 7); stc(C.offWhite)
     tx(log.date ? formatDisplayDate(log.date) : '', W - M, 9, { align: 'right' })
     sf('bold', 6); stc([180, 50, 30]); tx('OFFICIAL – SENSITIVE', W/2, 9, { align: 'center' })
   }
@@ -109,7 +110,7 @@ export async function generatePDF(log: LogState): Promise<void> {
     sfc(C.blue); rc(M, y, W - M*2, 9)
     sfc(C.orange); rc(M, y, 3, 9)
     sf('bold', 9); stc(C.white); tx(title, M + 6, y + 6.2)
-    if (sub) { sf('normal', 7); stc(C.steel); tx(sub, W - M, y + 6.2, { align: 'right' }) }
+    if (sub) { sf('normal', 7); stc(C.offWhite); tx(sub, W - M, y + 6.2, { align: 'right' }) }
     y += 14
   }
 
@@ -119,24 +120,24 @@ export async function generatePDF(log: LogState): Promise<void> {
     const colW = (W - M*2) / 2 - 2
     const sx = M + xOff
     // Shift label
-    sfc(C.steel); rc(sx, y, colW, 7)
-    sf('bold', 8); stc(C.white); tx(label, sx + colW/2, y + 5, { align: 'center' })
-    let ry = y + 8
+    sfc(C.steel); rc(sx, y, colW, 8)
+    sf('bold', 9); stc(C.white); tx(label, sx + colW/2, y + 5.5, { align: 'center' })
+    let ry = y + 9
     // Column headers
-    sfc(C.lightGray); rc(sx, ry, colW, 6)
-    sf('bold', 7); stc(C.darkGray)
-    tx('ROLE', sx + 2, ry + 4.2)
-    tx('NAME', sx + colW * 0.38, ry + 4.2)
-    tx('PERIOD', sx + colW * 0.78, ry + 4.2)
-    ry += 7
+    sfc(C.lightGray); rc(sx, ry, colW, 7)
+    sf('bold', 8); stc(C.darkGray)
+    tx('ROLE', sx + 2, ry + 4.9)
+    tx('NAME', sx + colW * 0.36, ry + 4.9)
+    tx('PERIOD', sx + colW * 0.78, ry + 4.9)
+    ry += 8
     slots.forEach((slot, i) => {
-      sfc(i % 2 === 0 ? C.white : C.offWhite); rc(sx, ry, colW, 7)
-      sf('bold', 7); stc(C.steel); tx(slot.role, sx + 2, ry + 4.8)
-      sf('normal', 7); stc(slot.name ? C.darkGray : C.midGray)
-      tx(slot.name || '—', sx + colW * 0.38, ry + 4.8)
-      sf('normal', 6.5); stc(C.midGray)
-      tx(`${slot.start}–${slot.end}`, sx + colW * 0.78, ry + 4.8)
-      ry += 7
+      sfc(i % 2 === 0 ? C.white : C.offWhite); rc(sx, ry, colW, 8)
+      sf('bold', 8); stc(C.steel); tx(slot.role, sx + 2, ry + 5.3)
+      sf('normal', 8); stc(slot.name ? C.black : C.midGray)
+      tx(slot.name || '—', sx + colW * 0.36, ry + 5.3)
+      sf('normal', 7.5); stc(C.darkGray)
+      tx(`${slot.start}–${slot.end}`, sx + colW * 0.78, ry + 5.3)
+      ry += 8.5
     })
     return ry
   }
@@ -162,7 +163,7 @@ export async function generatePDF(log: LogState): Promise<void> {
       sfc(bg); rc(bx, y, boxW - 1, 20)
       sf('bold', 16); stc(hasHit ? C.white : C.lightGray)
       tx(String(s.count), bx + (boxW-1)/2, y + 13, { align: 'center' })
-      sf('normal', 5.5); stc(hasHit ? C.steel : C.midGray)
+      sf('normal', 5.5); stc(hasHit ? C.white : C.darkGray)
       tx(s.label.toUpperCase(), bx + (boxW-1)/2, y + 18.5, { align: 'center' })
     })
     y += 24
@@ -204,9 +205,9 @@ export async function generatePDF(log: LogState): Promise<void> {
   // ── 1. Roster ─────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)
   const rosterStartY = y
-  const dayEnd   = drawRosterHalf(log.roster.dayShift,   '◑  DAY SHIFT',   0)
+  const dayEnd   = drawRosterHalf(log.roster.dayShift,   'DAY SHIFT',   0)
   y = rosterStartY
-  const nightEnd = drawRosterHalf(log.roster.nightShift, '◐  NIGHT SHIFT', (W - M*2)/2 + 2)
+  const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
 
   // ── 2. Safety infographic ─────────────────────────────────────────────────
@@ -226,10 +227,10 @@ export async function generatePDF(log: LogState): Promise<void> {
     sectionHead('SIGNIFICANT INCIDENTS', `${highlights.length} flagged`)
 
     for (const inc of highlights) {
-      checkPage(38)
+      checkPage(34)
       const cat      = CATEGORY_CONFIG[inc.category]
       const sevColor = SEV_COLOR[inc.severity] || C.midGray
-      const cardH    = 34
+      const cardH    = 30
 
       // Card background
       sfc(C.offWhite); rc(M, y, W - M*2, cardH)
@@ -241,35 +242,35 @@ export async function generatePDF(log: LogState): Promise<void> {
       tx(cat.shortLabel, W - M - 12, y + 6.8, { align: 'center' })
 
       // CCIL ref + time
-      sf('bold', 6); stc(C.midGray)
-      tx(inc.ccil ? `CCIL ${inc.ccil}` : '', M + 5, y + 6)
-      sf('normal', 6.5); stc(C.steel)
+      sf('bold', 7.3); stc(C.darkGray)
+      tx(inc.ccil ? `CCIL ${inc.ccil}` : '', M + 5, y + 6.5)
+      sf('normal', 7.2); stc(C.darkGray)
       const locStr = [inc.incidentStart, inc.location].filter(Boolean).join('  ·  ')
-      tx(locStr, M + 5, y + 11)
+      tx(locStr, M + 26, y + 6.5)
 
       // Title
-      sf('bold', 9); stc(C.blue)
+      sf('bold', 10.5); stc(C.blue)
       const titleLines = doc.splitTextToSize(inc.title, W - M*2 - 32)
-      tx(titleLines.slice(0, 2), M + 5, y + 18)
+      tx(titleLines.slice(0, 2), M + 5, y + 14.5)
 
       // Description snippet
       if (inc.description) {
-        const desc = inc.description.length > 200 ? inc.description.slice(0, 200) + '…' : inc.description
-        sf('normal', 6.5); stc(C.darkGray)
+        const desc = inc.description.length > 170 ? inc.description.slice(0, 170) + '…' : inc.description
+        sf('normal', 7.4); stc(C.darkGray)
         const dl = doc.splitTextToSize(desc, W - M*2 - 10)
-        tx(dl.slice(0, 2), M + 5, y + 26)
+        tx(dl.slice(0, 2), M + 5, y + 22.5)
       }
 
       // Disruption figures right side
       if ((inc.minutesDelay || 0) > 0 || (inc.cancelled || 0) > 0) {
-        sf('bold', 9); stc(sevColor)
-        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 16, { align: 'right' })
-        sf('normal', 6.5); stc(C.midGray)
-        if (inc.cancelled)     tx(`${inc.cancelled} cancelled`, W - M - 4, y + 22, { align: 'right' })
-        if (inc.partCancelled) tx(`${inc.partCancelled} part-can`, W - M - 4, y + 28, { align: 'right' })
+        sf('bold', 10); stc(sevColor)
+        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        sf('normal', 7.2); stc(C.darkGray)
+        if (inc.cancelled)     tx(`Can: ${inc.cancelled}`, W - M - 4, y + 20, { align: 'right' })
+        if (inc.partCancelled) tx(`Part-can: ${inc.partCancelled}`, W - M - 4, y + 25, { align: 'right' })
       }
 
-      y += cardH + 3
+      y += cardH + 2.5
     }
   }
 
@@ -386,44 +387,133 @@ export async function generatePDF(log: LogState): Promise<void> {
     y = getAutoY() + 8
   }
 
-  // ── 7. Verbatim CCIL appendix ─────────────────────────────────────────────
-  // Preserve the raw markdown table formatting exactly as CCIL produced it.
-
-  if (log.rawLogText) {
+  // ── 7. Appendix: compact detail + chronology ──────────────────────────────
+  if (log.incidents.length > 0) {
     newPage()
-    sectionHead('APPENDIX — FULL CCIL LOG (VERBATIM)', 'Control Centre Incident Log export — unedited')
+    sectionHead('APPENDIX — CCIL INCIDENT DETAIL LOG', 'Compact detail table + chronological event timeline')
 
-    sf('italic', 7); stc(C.midGray)
-    tx('The following is the unedited CCIL export for this period. Contents are OFFICIAL-SENSITIVE.', M, y)
-    y += 8
+    sf('normal', 7); stc(C.black)
+    tx('Core incident details', M, y)
+    y += 2
 
-    // Render line by line preserving the pipe-table structure
-    const rawLines = log.rawLogText.split('\n')
-    sf('normal', 6)
-    stc(C.darkGray)
-    doc.setFont('courier', 'normal')  // monospace for table alignment
-    doc.setFontSize(5.8)
+    const appendixIncidents = [...log.incidents].sort((a, b) => {
+      const ta = (a.incidentStart || '99:99')
+      const tb = (b.incidentStart || '99:99')
+      return ta.localeCompare(tb)
+    })
 
-    for (const raw of rawLines) {
-      const line = raw.replace(/\r/g, '')
-      checkPage(4)
+    autoTable(doc, {
+      startY: y + 3,
+      head: [['CCIL', 'Start', 'Category', 'Sev', 'Location', 'Incident', 'Delay', 'Can', 'PtCan']],
+      body: appendixIncidents.map((inc) => [
+        inc.ccil || '—',
+        inc.incidentStart || '—',
+        CATEGORY_CONFIG[inc.category].shortLabel,
+        inc.severity,
+        inc.location || '—',
+        inc.title.length > 70 ? `${inc.title.slice(0, 70)}…` : inc.title,
+        (inc.minutesDelay || 0) > 0 ? String(inc.minutesDelay) : '0',
+        String(inc.cancelled || 0),
+        String(inc.partCancelled || 0),
+      ]),
+      margin: { left: M, right: M },
+      theme: 'grid',
+      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
+      bodyStyles: { textColor: C.black, fontSize: 6.4, cellPadding: 1.6, lineColor: C.lightGray, lineWidth: 0.1 },
+      alternateRowStyles: { fillColor: [245, 247, 250] as RGB },
+      columnStyles: {
+        0: { cellWidth: 15 },
+        1: { cellWidth: 12 },
+        2: { cellWidth: 15 },
+        3: { cellWidth: 10 },
+        4: { cellWidth: 28 },
+        5: { cellWidth: 'auto' },
+        6: { cellWidth: 12, halign: 'right' as const },
+        7: { cellWidth: 10, halign: 'right' as const },
+        8: { cellWidth: 12, halign: 'right' as const },
+      },
+      didParseCell: (data: any) => {
+        if (data.section === 'body' && data.column.index === 3) {
+          data.cell.styles.fontStyle = 'bold'
+          data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.black
+        }
+      },
+    })
+    y = getAutoY() + 8
 
-      // Section dividers (--- lines) — draw as a thin rule
-      if (/^\|?\s*---/.test(line)) {
-        sdc(C.lightGray)
-        doc.setLineWidth(0.2)
-        ln(M, y, W - M, y)
-        y += 1.5
-        continue
+    checkPage(18)
+    sf('normal', 7); stc(C.black)
+    tx('Chronological event log', M, y)
+    y += 2
+
+    const eventRows = appendixIncidents.flatMap((inc) => {
+      if (!inc.events || inc.events.length === 0) {
+        return [[
+          '',
+          inc.incidentStart || '—',
+          inc.ccil || '—',
+          'NR',
+          inc.title,
+        ]]
       }
 
-      // Render the raw text — preserve pipes and spacing
-      const displayLine = line.length > 180 ? line.slice(0, 180) + '…' : line
-      if (displayLine.trim()) {
-        doc.text(displayLine, M, y, { maxWidth: W - M*2 })
-      }
-      y += 3.5
-    }
+      return [...inc.events]
+        .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
+        .map((ev) => [
+          ev.date || '',
+          ev.time || '',
+          inc.ccil || '—',
+          ev.company || '—',
+          ev.description || inc.title,
+        ])
+    })
+      .sort((a, b) => `${a[0]} ${a[1]}`.localeCompare(`${b[0]} ${b[1]}`))
+
+    autoTable(doc, {
+      startY: y + 3,
+      head: [['Date', 'Time', 'CCIL', 'Co', 'Event / Entry']],
+      body: eventRows.map((r) => [r[0], r[1], r[2], r[3], String(r[4]).slice(0, 220)]),
+      margin: { left: M, right: M },
+      theme: 'grid',
+      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
+      bodyStyles: { textColor: C.black, fontSize: 6.2, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
+      alternateRowStyles: { fillColor: [247, 248, 251] as RGB },
+      columnStyles: {
+        0: { cellWidth: 16 },
+        1: { cellWidth: 12 },
+        2: { cellWidth: 16 },
+        3: { cellWidth: 12 },
+        4: { cellWidth: 'auto' },
+      },
+      didDrawPage: () => {
+        drawCompactHeader()
+      },
+    })
+    y = getAutoY() + 6
+  } else if (log.rawLogText) {
+    newPage()
+    sectionHead('APPENDIX — FULL CCIL LOG (VERBATIM)', 'Unedited export text')
+
+    sf('normal', 7); stc(C.black)
+    const rawLines = log.rawLogText.split('\n').filter(line => line.trim())
+    tx('No parsed incidents were available, so the raw CCIL export is shown below.', M, y)
+    y += 6
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Raw CCIL export lines']],
+      body: rawLines.map((line) => [line.replace(/\r/g, '').slice(0, 300)]),
+      margin: { left: M, right: M },
+      theme: 'grid',
+      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
+      bodyStyles: { textColor: C.black, fontSize: 6, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
+      alternateRowStyles: { fillColor: [247, 248, 251] as RGB },
+      columnStyles: { 0: { cellWidth: 'auto' } },
+      didDrawPage: () => {
+        drawCompactHeader()
+      },
+    })
+    y = getAutoY() + 6
   }
 
   // ── Add footers to all pages ──────────────────────────────────────────────

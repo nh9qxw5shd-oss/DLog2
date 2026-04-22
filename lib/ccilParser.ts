@@ -67,7 +67,7 @@ const SKIP_TITLE_PATTERNS = [
 // Matches mammoth's markdown table output exactly:
 // | Title | **Location:** | **Incident 3173890 ** | 05/12/2025 15:00 |
 
-const INCIDENT_HEADER = /^\| (.+?) \| \*\*Location:\*\* \| \*\*Incident \*\*(\d+) \*\* \*\* \| ([\d\/]+ [\d:]+) \|$/
+const INCIDENT_HEADER = /^\|\s*(.+?)\s*\|\s*\*\*Location:\*\*\s*\|\s*\*\*Incident\s+(\d+)\s*\*\*\s*\|\s*([\d\/]+ [\d:]+)\s*\|$/i
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -177,25 +177,38 @@ function parseIncidentBlock(
     if (!line) continue
     if (line === '| --- | --- | --- | --- |') continue
 
-    // Location row (i=2): |  | Location Name |  |  |
-    if (i === 2 && line.startsWith('|')) {
-      const cells = cellValues(line)
-      location = cells[1] || cells[0] || ''
-      location = location.replace(/\s*-?\s*\[[A-Z]{2,4}\]/g, '').replace(/ - $/, '').trim()
-      continue
+    const cells = line.startsWith('|') ? cellValues(line) : []
+
+    // Location row (usually near top): prefer non-label cell with meaningful text.
+    if (!location && cells.length > 0) {
+      const candidates = cells
+        .map(c => c.trim())
+        .filter(Boolean)
+        .filter(c => !/^(Location|Line|Fault Number|Area|Action|BTP Ref|Incident Start|Updated|Advised|Date|Time|Company|Description|TDA|TRMC|Can|Pt Can|Trains|Mins|FTS|Files)\s*:?\s*$/i.test(c))
+        .filter(c => !/^\d{1,3}[A-Z]?\s/.test(c)) // exclude type-code style values e.g. "18 Fires"
+        .filter(c => !/^Incident\s+\d+$/i.test(c))
+
+      if (candidates.length > 0) {
+        const topCandidate = candidates[0]
+        if (!/:\s*$/.test(topCandidate)) {
+          location = topCandidate
+            .replace(/\s*-?\s*\[[A-Z]{2,4}\]/g, '')
+            .replace(/ - $/, '')
+            .trim()
+        }
+      }
     }
 
-    // Type + fault row (i=3): | **07b Level Crossing...** | **Line: ** | **Fault Number:** | 1141433 |
-    if (i === 3 && line.startsWith('|')) {
+    // Type + fault row: | **07b Level Crossing...** | **Line: ** | **Fault Number:** | 1141433 |
+    if (cells.length > 0 && line.includes('Fault Number')) {
       const cells = cellValues(line)
       incidentType = cells[0] || ''
       faultNo = cells[3] || ''
       continue
     }
 
-    // Area / Action / BTP (i=5): | **Area: ** | **Action: ** MB | **BTP Ref:** | 392 |
-    if (i === 5 && line.startsWith('|')) {
-      const cells = cellValues(line)
+    // Area / Action / BTP: | **Area: ** | **Action: ** MB | **BTP Ref:** | 392 |
+    if (cells.length > 0 && line.includes('Area:') && line.includes('Action:')) {
       area = cells[0].replace(/^Area:\s*/i, '').trim()
       action = cells[1].replace(/^Action:\s*/i, '').trim()
       const btpM = cells[3]?.match(/^(\d+)/)
