@@ -44,7 +44,7 @@ export interface Incident {
   minutesDelay?: number
   btpRef?: string
   actionCode?: string
-  isHighlight: boolean  // flag for summary section
+  isHighlight: boolean
   rawText?: string
 }
 
@@ -55,7 +55,7 @@ export interface IncidentEvent {
   description: string
 }
 
-// ─── Roster Types ─────────────────────────────────────────────────────────────
+// ─── Roster — EMCC specific roles ────────────────────────────────────────────
 
 export interface ShiftSlot {
   role: string
@@ -69,76 +69,71 @@ export interface RosterData {
   nightShift: ShiftSlot[]
 }
 
-// ─── Performance Types ────────────────────────────────────────────────────────
-
-export interface PerformanceData {
-  timeTo3?: number
-  cancellations?: number
-  ppm?: number
-  freightArrivalT15?: number
-}
-
 // ─── Full Log State ───────────────────────────────────────────────────────────
 
 export interface LogState {
   date: string               // YYYY-MM-DD
-  period: string             // e.g. "21 Apr 2026 06:00 TO 22 Apr 2026 06:00"
+  period: string
   controlCentre: string
   createdBy?: string
   roster: RosterData
-  performance: PerformanceData
   incidents: Incident[]
   rawLogText?: string        // verbatim CCIL text for appendix
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 
-// ─── Category Config ─────────────────────────────────────────────────────────
+// ─── Category Config ──────────────────────────────────────────────────────────
 
 export const CATEGORY_CONFIG: Record<IncidentCategory, {
   label: string
   shortLabel: string
   color: string
-  bgColor: string
   priority: number
   showInSummary: boolean
 }> = {
-  FATALITY:          { label: 'Fatality',               shortLabel: 'FATAL',    color: '#E74C3C', bgColor: 'rgba(231,76,60,0.15)',   priority: 1,  showInSummary: true  },
-  PERSON_STRUCK:     { label: 'Person Struck by Train',  shortLabel: 'PST',      color: '#E74C3C', bgColor: 'rgba(231,76,60,0.15)',   priority: 2,  showInSummary: true  },
-  SPAD:              { label: 'Signal Passed at Danger', shortLabel: 'SPAD',     color: '#E05206', bgColor: 'rgba(224,82,6,0.15)',    priority: 3,  showInSummary: true  },
-  TPWS:              { label: 'TPWS Activation',         shortLabel: 'TPWS',     color: '#E05206', bgColor: 'rgba(224,82,6,0.15)',    priority: 4,  showInSummary: true  },
-  IRREGULAR_WORKING: { label: 'Irregular Working',       shortLabel: 'IRR',      color: '#F39C12', bgColor: 'rgba(243,156,18,0.12)', priority: 5,  showInSummary: true  },
-  BRIDGE_STRIKE:     { label: 'Bridge Strike',           shortLabel: 'BSTR',     color: '#F39C12', bgColor: 'rgba(243,156,18,0.12)', priority: 6,  showInSummary: true  },
-  NEAR_MISS:         { label: 'Near Miss',               shortLabel: 'NM',       color: '#F39C12', bgColor: 'rgba(243,156,18,0.12)', priority: 7,  showInSummary: true  },
-  HABD_WILD:         { label: 'HABD / WILD Activation',  shortLabel: 'HABD',     color: '#F39C12', bgColor: 'rgba(243,156,18,0.12)', priority: 8,  showInSummary: true  },
-  CRIME:             { label: 'Railway Crime',           shortLabel: 'CRIME',    color: '#9B59B6', bgColor: 'rgba(155,89,182,0.15)', priority: 9,  showInSummary: true  },
-  LEVEL_CROSSING:    { label: 'Level Crossing',          shortLabel: 'LC',       color: '#E05206', bgColor: 'rgba(224,82,6,0.12)',   priority: 10, showInSummary: true  },
-  FIRE:              { label: 'Fire',                    shortLabel: 'FIRE',     color: '#E74C3C', bgColor: 'rgba(231,76,60,0.12)',  priority: 11, showInSummary: true  },
-  INFRASTRUCTURE:    { label: 'Infrastructure Failure',  shortLabel: 'INFRA',    color: '#4A6FA5', bgColor: 'rgba(74,111,165,0.15)', priority: 12, showInSummary: false },
-  TRACTION_FAILURE:  { label: 'Traction Failure',        shortLabel: 'TRACT',    color: '#4A6FA5', bgColor: 'rgba(74,111,165,0.15)', priority: 13, showInSummary: false },
-  DERAILMENT:        { label: 'Derailment / Collision',  shortLabel: 'DERL',     color: '#E74C3C', bgColor: 'rgba(231,76,60,0.15)',  priority: 14, showInSummary: true  },
-  POSSESSION:        { label: 'Possession Issue',        shortLabel: 'POSS',     color: '#4A6FA5', bgColor: 'rgba(74,111,165,0.12)', priority: 15, showInSummary: false },
-  STATION_OVERRUN:   { label: 'Station Overrun',         shortLabel: 'OVRUN',    color: '#7A8BA8', bgColor: 'rgba(122,139,168,0.12)',priority: 16, showInSummary: false },
-  PASSENGER_INJURY:  { label: 'Passenger Injury',        shortLabel: 'PAX INJ',  color: '#E05206', bgColor: 'rgba(224,82,6,0.12)',   priority: 17, showInSummary: true  },
-  STRANDED_TRAIN:    { label: 'Stranded Train',          shortLabel: 'STRAND',   color: '#7A8BA8', bgColor: 'rgba(122,139,168,0.12)',priority: 18, showInSummary: false },
-  WEATHER:           { label: 'Weather Event',           shortLabel: 'WX',       color: '#4A6FA5', bgColor: 'rgba(74,111,165,0.12)', priority: 19, showInSummary: false },
-  GENERAL:           { label: 'General',                 shortLabel: 'GEN',      color: '#4A6FA5', bgColor: 'rgba(74,111,165,0.12)', priority: 20, showInSummary: false },
+  FATALITY:          { label: 'Fatality / Person Struck',  shortLabel: 'FATAL',   color: '#E74C3C', priority: 1,  showInSummary: true  },
+  PERSON_STRUCK:     { label: 'Person Struck by Train',    shortLabel: 'PST',     color: '#E74C3C', priority: 2,  showInSummary: true  },
+  SPAD:              { label: 'Signal Passed at Danger',   shortLabel: 'SPAD',    color: '#E05206', priority: 3,  showInSummary: true  },
+  TPWS:              { label: 'TPWS Activation',           shortLabel: 'TPWS',    color: '#E05206', priority: 4,  showInSummary: true  },
+  IRREGULAR_WORKING: { label: 'Irregular Working',         shortLabel: 'IRR',     color: '#F39C12', priority: 5,  showInSummary: true  },
+  BRIDGE_STRIKE:     { label: 'Bridge Strike',             shortLabel: 'BSTR',    color: '#F39C12', priority: 6,  showInSummary: true  },
+  NEAR_MISS:         { label: 'Near Miss',                 shortLabel: 'NM',      color: '#F39C12', priority: 7,  showInSummary: true  },
+  HABD_WILD:         { label: 'HABD / WILD Activation',   shortLabel: 'HABD',    color: '#F39C12', priority: 8,  showInSummary: true  },
+  CRIME:             { label: 'Railway Crime / Trespass',  shortLabel: 'CRIME',   color: '#9B59B6', priority: 9,  showInSummary: true  },
+  LEVEL_CROSSING:    { label: 'Level Crossing',            shortLabel: 'LC',      color: '#E05206', priority: 10, showInSummary: true  },
+  FIRE:              { label: 'Fire',                      shortLabel: 'FIRE',    color: '#E74C3C', priority: 11, showInSummary: true  },
+  PASSENGER_INJURY:  { label: 'Passenger / Public Injury', shortLabel: 'PAX INJ', color: '#E05206', priority: 12, showInSummary: true  },
+  DERAILMENT:        { label: 'Derailment / Collision',    shortLabel: 'DERL',    color: '#E74C3C', priority: 13, showInSummary: true  },
+  INFRASTRUCTURE:    { label: 'Infrastructure Failure',    shortLabel: 'INFRA',   color: '#4A6FA5', priority: 14, showInSummary: false },
+  TRACTION_FAILURE:  { label: 'Traction Failure',          shortLabel: 'TRACT',   color: '#4A6FA5', priority: 15, showInSummary: false },
+  POSSESSION:        { label: 'Possession Issue',          shortLabel: 'POSS',    color: '#4A6FA5', priority: 16, showInSummary: false },
+  STATION_OVERRUN:   { label: 'Station Overrun',           shortLabel: 'OVRUN',   color: '#7A8BA8', priority: 17, showInSummary: false },
+  STRANDED_TRAIN:    { label: 'Stranded Train',            shortLabel: 'STRAND',  color: '#7A8BA8', priority: 18, showInSummary: false },
+  WEATHER:           { label: 'Weather Event',             shortLabel: 'WX',      color: '#4A6FA5', priority: 19, showInSummary: false },
+  GENERAL:           { label: 'General / Other',           shortLabel: 'GEN',     color: '#4A6FA5', priority: 20, showInSummary: false },
 }
 
-export const SEVERITY_ORDER: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
+// ─── Default EMCC Roster ──────────────────────────────────────────────────────
 
 export const DEFAULT_ROSTER: RosterData = {
   dayShift: [
-    { role: 'SSM (Shift Signalling Manager)', name: '', start: '06:00', end: '18:00' },
-    { role: 'EMCC Controller', name: '', start: '06:00', end: '18:00' },
-    { role: 'EMCC Controller', name: '', start: '06:00', end: '18:00' },
-    { role: 'LOM (Local Operations Manager)', name: '', start: '07:00', end: '19:00' },
-    { role: 'MOM (Mobile Operations Manager)', name: '', start: '06:00', end: '18:00' },
+    { role: 'SNDM', name: '', start: '06:00', end: '18:00' },
+    { role: 'RCM',  name: '', start: '06:00', end: '18:00' },
+    { role: 'IC',   name: '', start: '06:00', end: '18:00' },
+    { role: 'IC2',  name: '', start: '06:00', end: '18:00' },
+    { role: 'TRC',  name: '', start: '06:00', end: '18:00' },
+    { role: 'WH TRC', name: '', start: '06:00', end: '18:00' },
+    { role: 'ISC',  name: '', start: '06:00', end: '18:00' },
+    { role: 'TSE',  name: '', start: '06:00', end: '18:00' },
   ],
   nightShift: [
-    { role: 'SSM (Shift Signalling Manager)', name: '', start: '18:00', end: '06:00' },
-    { role: 'EMCC Controller', name: '', start: '18:00', end: '06:00' },
-    { role: 'EMCC Controller', name: '', start: '18:00', end: '06:00' },
-    { role: 'LOM (Local Operations Manager)', name: '', start: '19:00', end: '07:00' },
-    { role: 'MOM (Mobile Operations Manager)', name: '', start: '18:00', end: '06:00' },
+    { role: 'SNDM', name: '', start: '18:00', end: '06:00' },
+    { role: 'RCM',  name: '', start: '18:00', end: '06:00' },
+    { role: 'IC',   name: '', start: '18:00', end: '06:00' },
+    { role: 'IC2',  name: '', start: '18:00', end: '06:00' },
+    { role: 'TRC',  name: '', start: '18:00', end: '06:00' },
+    { role: 'WH TRC', name: '', start: '18:00', end: '06:00' },
+    { role: 'ISC',  name: '', start: '18:00', end: '06:00' },
+    { role: 'TSE',  name: '', start: '18:00', end: '06:00' },
   ],
 }
