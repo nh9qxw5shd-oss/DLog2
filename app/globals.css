@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --nr-orange: #E05206;
+  --nr-blue: #003366;
+  --nr-navy: #001F45;
+  --nr-steel: #4A6FA5;
+  --nr-amber: #F39C12;
+  --nr-red: #C0392B;
+  --nr-green: #27AE60;
+  --bg-primary: #0A0F1E;
+  --bg-secondary: #0F1729;
+  --bg-card: #131C35;
+  --bg-card-hover: #162040;
+  --border: rgba(74, 111, 165, 0.25);
+  --border-bright: rgba(74, 111, 165, 0.5);
+  --text-primary: #E8EDF5;
+  --text-muted: #7A8BA8;
+  --text-dim: #4A5A72;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'IBM Plex Sans', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-mono { font-family: 'IBM Plex Mono', monospace; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--nr-steel); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--nr-blue); }
+
+/* Severity badges */
+.badge-critical {
+  background: rgba(192, 57, 43, 0.15);
+  border: 1px solid rgba(192, 57, 43, 0.4);
+  color: #E74C3C;
+}
+.badge-high {
+  background: rgba(224, 82, 6, 0.15);
+  border: 1px solid rgba(224, 82, 6, 0.4);
+  color: #E05206;
+}
+.badge-medium {
+  background: rgba(243, 156, 18, 0.12);
+  border: 1px solid rgba(243, 156, 18, 0.35);
+  color: #F39C12;
+}
+.badge-low {
+  background: rgba(39, 174, 96, 0.12);
+  border: 1px solid rgba(39, 174, 96, 0.35);
+  color: #27AE60;
+}
+.badge-info {
+  background: rgba(74, 111, 165, 0.15);
+  border: 1px solid rgba(74, 111, 165, 0.4);
+  color: #4A6FA5;
+}
+
+/* Card styles */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.card:hover {
+  border-color: var(--border-bright);
+}
+
+/* Grid scan line effect */
+.scanlines::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Animated pulse for live indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+/* Step indicator */
+.step-active {
+  background: var(--nr-orange);
+  color: white;
+}
+.step-complete {
+  background: var(--nr-green);
+  color: white;
+}
+.step-inactive {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* Upload drop zone */
+.drop-zone {
+  border: 2px dashed var(--border);
+  transition: all 0.2s ease;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--nr-orange);
+  background: rgba(224, 82, 6, 0.05);
+}
+
+/* Tab styles */
+.tab-active {
+  border-bottom: 2px solid var(--nr-orange);
+  color: var(--text-primary);
+}
+.tab-inactive {
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+}
+
+/* Print / PDF-specific override */
+@media print {
+  body { background: white !important; color: black !important; }
+}
