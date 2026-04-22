@@ -120,24 +120,24 @@ export async function generatePDF(log: LogState): Promise<void> {
     const colW = (W - M*2) / 2 - 2
     const sx = M + xOff
     // Shift label
-    sfc(C.steel); rc(sx, y, colW, 7)
-    sf('bold', 8); stc(C.white); tx(label, sx + colW/2, y + 5, { align: 'center' })
-    let ry = y + 8
+    sfc(C.steel); rc(sx, y, colW, 8)
+    sf('bold', 9); stc(C.white); tx(label, sx + colW/2, y + 5.5, { align: 'center' })
+    let ry = y + 9
     // Column headers
-    sfc(C.lightGray); rc(sx, ry, colW, 6)
-    sf('bold', 7); stc(C.darkGray)
-    tx('ROLE', sx + 2, ry + 4.2)
-    tx('NAME', sx + colW * 0.38, ry + 4.2)
-    tx('PERIOD', sx + colW * 0.78, ry + 4.2)
-    ry += 7
+    sfc(C.lightGray); rc(sx, ry, colW, 7)
+    sf('bold', 8); stc(C.darkGray)
+    tx('ROLE', sx + 2, ry + 4.9)
+    tx('NAME', sx + colW * 0.36, ry + 4.9)
+    tx('PERIOD', sx + colW * 0.78, ry + 4.9)
+    ry += 8
     slots.forEach((slot, i) => {
-      sfc(i % 2 === 0 ? C.white : C.offWhite); rc(sx, ry, colW, 7)
-      sf('bold', 7); stc(C.steel); tx(slot.role, sx + 2, ry + 4.8)
-      sf('normal', 7); stc(slot.name ? C.darkGray : C.midGray)
-      tx(slot.name || '—', sx + colW * 0.38, ry + 4.8)
-      sf('normal', 6.5); stc(C.midGray)
-      tx(`${slot.start}–${slot.end}`, sx + colW * 0.78, ry + 4.8)
-      ry += 7
+      sfc(i % 2 === 0 ? C.white : C.offWhite); rc(sx, ry, colW, 8)
+      sf('bold', 8); stc(C.steel); tx(slot.role, sx + 2, ry + 5.3)
+      sf('normal', 8); stc(slot.name ? C.black : C.midGray)
+      tx(slot.name || '—', sx + colW * 0.36, ry + 5.3)
+      sf('normal', 7.5); stc(C.darkGray)
+      tx(`${slot.start}–${slot.end}`, sx + colW * 0.78, ry + 5.3)
+      ry += 8.5
     })
     return ry
   }
@@ -205,9 +205,9 @@ export async function generatePDF(log: LogState): Promise<void> {
   // ── 1. Roster ─────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)
   const rosterStartY = y
-  const dayEnd   = drawRosterHalf(log.roster.dayShift,   '◑  DAY SHIFT',   0)
+  const dayEnd   = drawRosterHalf(log.roster.dayShift,   'DAY SHIFT',   0)
   y = rosterStartY
-  const nightEnd = drawRosterHalf(log.roster.nightShift, '◐  NIGHT SHIFT', (W - M*2)/2 + 2)
+  const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
 
   // ── 2. Safety infographic ─────────────────────────────────────────────────
@@ -227,10 +227,10 @@ export async function generatePDF(log: LogState): Promise<void> {
     sectionHead('SIGNIFICANT INCIDENTS', `${highlights.length} flagged`)
 
     for (const inc of highlights) {
-      checkPage(38)
+      checkPage(34)
       const cat      = CATEGORY_CONFIG[inc.category]
       const sevColor = SEV_COLOR[inc.severity] || C.midGray
-      const cardH    = 34
+      const cardH    = 30
 
       // Card background
       sfc(C.offWhite); rc(M, y, W - M*2, cardH)
@@ -242,35 +242,35 @@ export async function generatePDF(log: LogState): Promise<void> {
       tx(cat.shortLabel, W - M - 12, y + 6.8, { align: 'center' })
 
       // CCIL ref + time
-      sf('bold', 6.5); stc(C.darkGray)
-      tx(inc.ccil ? `CCIL ${inc.ccil}` : '', M + 5, y + 6)
-      sf('normal', 6.5); stc(C.darkGray)
+      sf('bold', 7.3); stc(C.darkGray)
+      tx(inc.ccil ? `CCIL ${inc.ccil}` : '', M + 5, y + 6.5)
+      sf('normal', 7.2); stc(C.darkGray)
       const locStr = [inc.incidentStart, inc.location].filter(Boolean).join('  ·  ')
-      tx(locStr, M + 5, y + 11)
+      tx(locStr, M + 26, y + 6.5)
 
       // Title
-      sf('bold', 9); stc(C.blue)
+      sf('bold', 10.5); stc(C.blue)
       const titleLines = doc.splitTextToSize(inc.title, W - M*2 - 32)
-      tx(titleLines.slice(0, 2), M + 5, y + 18)
+      tx(titleLines.slice(0, 2), M + 5, y + 14.5)
 
       // Description snippet
       if (inc.description) {
-        const desc = inc.description.length > 200 ? inc.description.slice(0, 200) + '…' : inc.description
-        sf('normal', 6.5); stc(C.darkGray)
+        const desc = inc.description.length > 170 ? inc.description.slice(0, 170) + '…' : inc.description
+        sf('normal', 7.4); stc(C.darkGray)
         const dl = doc.splitTextToSize(desc, W - M*2 - 10)
-        tx(dl.slice(0, 2), M + 5, y + 26)
+        tx(dl.slice(0, 2), M + 5, y + 22.5)
       }
 
       // Disruption figures right side
       if ((inc.minutesDelay || 0) > 0 || (inc.cancelled || 0) > 0) {
-        sf('bold', 9); stc(sevColor)
-        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 16, { align: 'right' })
-        sf('normal', 6.5); stc(C.darkGray)
-        if (inc.cancelled)     tx(`${inc.cancelled} cancelled`, W - M - 4, y + 22, { align: 'right' })
-        if (inc.partCancelled) tx(`${inc.partCancelled} part-can`, W - M - 4, y + 28, { align: 'right' })
+        sf('bold', 10); stc(sevColor)
+        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        sf('normal', 7.2); stc(C.darkGray)
+        if (inc.cancelled)     tx(`Can: ${inc.cancelled}`, W - M - 4, y + 20, { align: 'right' })
+        if (inc.partCancelled) tx(`Part-can: ${inc.partCancelled}`, W - M - 4, y + 25, { align: 'right' })
       }
 
-      y += cardH + 3
+      y += cardH + 2.5
     }
   }
 
