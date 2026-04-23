@@ -4,10 +4,10 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
-  Loader2, AlertCircle, Activity, Flame, Shield
+  Loader2, AlertCircle, Activity, Flame, Shield, Pencil
 } from 'lucide-react'
 import {
-  LogState, Incident, RosterData, ShiftSlot,
+  LogState, Incident, RosterData, ShiftSlot, Severity,
   DEFAULT_ROSTER, CATEGORY_CONFIG, IncidentCategory
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
@@ -330,13 +330,80 @@ const CAT_ICON_MAP: Partial<Record<IncidentCategory, typeof Shield>> = {
   FIRE: Flame, CRIME: AlertCircle, HABD_WILD: Activity, NEAR_MISS: AlertTriangle,
 }
 
-function IncidentCard({ incident, onRemove, onToggleHighlight }: {
+function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
   incident: Incident
   onRemove: () => void
   onToggleHighlight: () => void
+  onEdit: (updates: Pick<Incident, 'title' | 'severity' | 'category'>) => void
 }) {
-  const cat  = CATEGORY_CONFIG[incident.category]
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft]     = useState({ title: incident.title, severity: incident.severity, category: incident.category })
+
+  const startEdit = () => {
+    setDraft({ title: incident.title, severity: incident.severity, category: incident.category })
+    setEditing(true)
+  }
+  const saveEdit = () => { onEdit(draft); setEditing(false) }
+  const cancelEdit = () => setEditing(false)
+
+  const cat  = CATEGORY_CONFIG[editing ? draft.category : incident.category]
   const Icon = CAT_ICON_MAP[incident.category] || AlertCircle
+
+  if (editing) {
+    return (
+      <div className="card p-4 space-y-3 border border-[rgba(74,111,165,0.5)]">
+        <div className="flex items-center gap-2 pb-1 border-b border-[rgba(74,111,165,0.2)]">
+          <Pencil size={12} className="text-[#4A6FA5]" />
+          <span className="text-xs font-semibold text-[#4A6FA5] uppercase tracking-wider">Edit Incident</span>
+          {incident.ccil && <span className="text-xs text-[#4A5A72] font-mono ml-auto">CCIL {incident.ccil}</span>}
+        </div>
+        <div>
+          <label className="block text-xs text-[#7A8BA8] mb-1">Title</label>
+          <input
+            type="text"
+            value={draft.title}
+            onChange={e => setDraft(p => ({ ...p, title: e.target.value }))}
+            className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-[#7A8BA8] mb-1">Incident Type</label>
+            <select
+              value={draft.category}
+              onChange={e => setDraft(p => ({ ...p, category: e.target.value as IncidentCategory }))}
+              className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none"
+            >
+              {Object.entries(CATEGORY_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-[#7A8BA8] mb-1">Severity</label>
+            <select
+              value={draft.severity}
+              onChange={e => setDraft(p => ({ ...p, severity: e.target.value as Severity }))}
+              className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none"
+            >
+              {(['CRITICAL','HIGH','MEDIUM','LOW','INFO'] as Severity[]).map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={saveEdit}
+            className="flex items-center gap-2 px-4 py-2 bg-[#E05206] text-white text-sm rounded hover:bg-[#c44804] transition-colors">
+            <Check size={13} /> Save
+          </button>
+          <button onClick={cancelEdit}
+            className="flex items-center gap-2 px-4 py-2 border border-[rgba(74,111,165,0.3)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">
+            <X size={13} /> Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={cn('card p-4 space-y-2 transition-all', incident.isHighlight && 'border-l-2 border-l-[#E05206]')}>
       <div className="flex items-start justify-between gap-3">
@@ -365,6 +432,10 @@ function IncidentCard({ incident, onRemove, onToggleHighlight }: {
           {(incident.cancelled    || 0) > 0 && <span className="text-[#4A5A72]">{incident.cancelled} cancelled</span>}
         </div>
         <div className="flex items-center gap-1">
+          <button onClick={startEdit} title="Edit incident"
+            className="p-1.5 rounded text-[#4A5A72] hover:text-[#4A6FA5] transition-colors">
+            <Pencil size={12} />
+          </button>
           <button onClick={onToggleHighlight} title={incident.isHighlight ? 'Remove from highlights' : 'Add to highlights'}
             className={cn('p-1.5 rounded transition-colors', incident.isHighlight ? 'text-[#E05206]' : 'text-[#4A5A72] hover:text-[#7A8BA8]')}>
             <AlertTriangle size={12} />
@@ -484,7 +555,8 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
           {filtered.map(inc => (
             <IncidentCard key={inc.id} incident={inc}
               onRemove={() => onUpdate(log.incidents.filter(i => i.id !== inc.id))}
-              onToggleHighlight={() => toggle(inc.id, 'isHighlight')} />
+              onToggleHighlight={() => toggle(inc.id, 'isHighlight')}
+              onEdit={updates => onUpdate(log.incidents.map(i => i.id === inc.id ? { ...i, ...updates } : i))} />
           ))}
         </div>
       )}
