@@ -17,9 +17,11 @@ const CATEGORY_PATTERNS: Array<[RegExp, IncidentCategory]> = [
   [/lineside fire|fire.*lineside|fire.*track|fire.*sleeper|fire.*vegetation/i,     'FIRE'],
   [/trespass|theft|robbery|graffiti|vandal/i,                                      'CRIME'],
   [/level crossing|AHB\b|MCG\b|AOCL\b|AHBC\b|crossing.*misuse|crossing.*failure/i,'LEVEL_CROSSING'],
-  [/passenger.*injur|injur.*passenger|public.*injur|person.*fell.*track/i,         'PASSENGER_INJURY'],
-  [/assault.*passenger|passenger.*assault/i,                                       'PASSENGER_INJURY'],
-  [/traction failure|unit.*failure|VCB not closing|AWS brake demand|bogie.*fault/i,'TRACTION_FAILURE'],
+  [/verbal assault|assault on staff|staff.*assault|crew.*assault|attack on staff/i,   'PASSENGER_INJURY'],
+  [/passenger.*injur|injur.*passenger|public.*injur|person.*fell.*track/i,             'PASSENGER_INJURY'],
+  [/assault.*passenger|passenger.*assault/i,                                           'PASSENGER_INJURY'],
+  [/door fault|door failure|unit fault|unit defect|on.?train fault|train.*defect|defective.*unit|bogie.*fault|unit.*failure|AWS brake demand/i, 'TRAIN_FAULT'],
+  [/traction failure|VCB not closing|OHL.*loss|power.*loss|loss.*traction.*power/i,    'TRACTION_FAILURE'],
   [/\bOLE\b|overhead line.*damage|dewirement|pantograph/i,                         'INFRASTRUCTURE'],
   [/track circuit.*fail|axle counter.*fail|points failure|signalling failure|signal.*fault|loss of signalling/i, 'INFRASTRUCTURE'],
   [/PICOP|T3-D\b|signalling disconnection/i,                                       'POSSESSION'],
@@ -33,7 +35,7 @@ const SEVERITY_RULES: Array<[IncidentCategory[], Severity]> = [
   [['SPAD', 'FIRE', 'BRIDGE_STRIKE'],                                   'HIGH'],
   [['TPWS', 'NEAR_MISS', 'IRREGULAR_WORKING', 'HABD_WILD'],            'MEDIUM'],
   [['CRIME', 'LEVEL_CROSSING', 'PASSENGER_INJURY', 'TRACTION_FAILURE'], 'MEDIUM'],
-  [['INFRASTRUCTURE', 'POSSESSION', 'STATION_OVERRUN'],                 'LOW'],
+  [['INFRASTRUCTURE', 'POSSESSION', 'STATION_OVERRUN', 'TRAIN_FAULT'],  'LOW'],
   [['STRANDED_TRAIN', 'WEATHER', 'GENERAL'],                            'INFO'],
 ]
 
@@ -125,13 +127,14 @@ const TYPE_CODE_MAP: Array<[RegExp, IncidentCategory]> = [
   // ── 50s: train/depot operational codes ────────────────────────────────────
   [/^52\s/i,          'LEVEL_CROSSING'],   // 52 Level crossing failure
   [/^53\s/i,          'GENERAL'],          // 53 Depot operating issues
-  [/^5[45]\s/i,       'TRACTION_FAILURE'], // 54 On-train defect, 55 Train failure on depot
+  [/^54\s/i,          'TRAIN_FAULT'],      // 54 On-train defect
+  [/^55\s/i,          'TRAIN_FAULT'],      // 55 Train failure on depot
   [/^58\s/i,          'INFRASTRUCTURE'],   // 58 Signal obscured
   [/^59\s/i,          'GENERAL'],          // 59 Staff issues
   // ── 60s–80s: operational/admin ─────────────────────────────────────────────
   [/^64\s/i,          'INFRASTRUCTURE'],   // 64 Station infrastructure
   [/^70\s/i,          'CRIME'],            // 70 Security issues
-  [/^71\s/i,          'TRACTION_FAILURE'], // 71 On-train defect (RB)
+  [/^71\s/i,          'TRAIN_FAULT'],       // 71 On-train defect (RB)
   [/^73\s/i,          'GENERAL'],          // 73 Passenger matters
   [/^78\s/i,          'GENERAL'],          // 78 Actions to improve performance
   [/^87\s/i,          'PERSON_STRUCK'],    // 87 Person struck by train
@@ -281,24 +284,38 @@ function parseIncidentBlock(
     }
   }
 
+  // ── Title-based overrides: correct common CCIL miscoding ──────────────────
+  // Assaults/accidents miscoded as PERSON_STRUCK (type codes 13/87) → PASSENGER_INJURY
+  if (category === 'PERSON_STRUCK' &&
+      /verbal assault|assault on staff|staff.*assault|anti.?social|harassment|accident.*train|accident.*platform|slip|trip|fell/i.test(searchText) &&
+      !/struck.*train|by.*train/i.test(title)) {
+    category = 'PASSENGER_INJURY'
+  }
+  // Mechanical/door faults miscoded as DERAILMENT (type code 10) → TRAIN_FAULT
+  if (category === 'DERAILMENT' &&
+      /door fault|door failure|unit.*fault|unit.*defect|train.*defect|on.?board|mechanical|bogie/i.test(title) &&
+      !/derail|divided|runaway/i.test(title)) {
+    category = 'TRAIN_FAULT'
+  }
+  // Near miss incidents miscoded as HABD (type code 08) → NEAR_MISS
+  if (category === 'HABD_WILD' && /near.?miss/i.test(title)) {
+    category = 'NEAR_MISS'
+  }
+
   let severity: Severity = 'LOW'
   for (const [cats, sev] of SEVERITY_RULES) {
     if (cats.includes(category)) { severity = sev; break }
   }
-  if (severity === 'LOW' && minutesDelay > 2000) severity = 'HIGH'
+  if (severity === 'LOW' && minutesDelay > 2000) severity = 'CRITICAL'
+  else if (severity === 'LOW' && minutesDelay > 1000) severity = 'HIGH'
   else if (severity === 'LOW' && minutesDelay > 500) severity = 'MEDIUM'
 
   // ── Best description ───────────────────────────────────────────────────────
   const nrEvent = events.find(e => e.company === 'NR' && e.description.length > 50)
   const description = (nrEvent || events[0])?.description?.replace(/\s+/g, ' ').trim() || title
 
-  // ── Highlight flag ─────────────────────────────────────────────────────────
-  const highlightCats: IncidentCategory[] = [
-    'FATALITY', 'PERSON_STRUCK', 'SPAD', 'FIRE', 'BRIDGE_STRIKE',
-    'NEAR_MISS', 'IRREGULAR_WORKING', 'CRIME', 'HABD_WILD',
-    'DERAILMENT', 'LEVEL_CROSSING', 'PASSENGER_INJURY',
-  ]
-  const isHighlight = highlightCats.includes(category) || minutesDelay > 1000 || cancelled > 10
+  // ── Highlight flag — assigned in parseCCILText after all incidents are known ──
+  const isHighlight = false
 
   return {
     id: `ccil-${ccil}`,
@@ -376,6 +393,16 @@ export function parseCCILText(rawText: string): Incident[] {
     const d = sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity)
     return d !== 0 ? d : (b.minutesDelay || 0) - (a.minutesDelay || 0)
   })
+
+  // ── Auto-highlight: top 5 incidents with delay > 100 min ──────────────────
+  const highlighted = new Set(
+    [...incidents]
+      .filter(i => (i.minutesDelay || 0) > 100)
+      .sort((a, b) => (b.minutesDelay || 0) - (a.minutesDelay || 0))
+      .slice(0, 5)
+      .map(i => i.id)
+  )
+  incidents.forEach(i => { i.isHighlight = highlighted.has(i.id) })
 
   return incidents
 }
