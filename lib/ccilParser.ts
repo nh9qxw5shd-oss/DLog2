@@ -17,11 +17,11 @@ const CATEGORY_PATTERNS: Array<[RegExp, IncidentCategory]> = [
   [/lineside fire|fire.*lineside|fire.*track|fire.*sleeper|fire.*vegetation/i,     'FIRE'],
   [/trespass|theft|robbery|graffiti|vandal/i,                                      'CRIME'],
   [/level crossing|AHB\b|MCG\b|AOCL\b|AHBC\b|crossing.*misuse|crossing.*failure/i,'LEVEL_CROSSING'],
-  [/verbal assault|assault on staff|staff.*assault|crew.*assault|anti.?social behaviour/i, 'CRIME'],
-  [/passenger.*injur|injur.*passenger|public.*injur|person.*fell.*track/i,         'PASSENGER_INJURY'],
-  [/assault.*passenger|passenger.*assault/i,                                       'PASSENGER_INJURY'],
-  [/door fault|door failure|unit fault|unit defect|on.?train fault|train.*defect|defective.*unit/i, 'TRAIN_FAULT'],
-  [/traction failure|unit.*failure|VCB not closing|AWS brake demand|bogie.*fault/i,'TRACTION_FAILURE'],
+  [/verbal assault|assault on staff|staff.*assault|crew.*assault|attack on staff/i,   'PASSENGER_INJURY'],
+  [/passenger.*injur|injur.*passenger|public.*injur|person.*fell.*track/i,             'PASSENGER_INJURY'],
+  [/assault.*passenger|passenger.*assault/i,                                           'PASSENGER_INJURY'],
+  [/door fault|door failure|unit fault|unit defect|on.?train fault|train.*defect|defective.*unit|bogie.*fault|unit.*failure|AWS brake demand/i, 'TRAIN_FAULT'],
+  [/traction failure|VCB not closing|OHL.*loss|power.*loss|loss.*traction.*power/i,    'TRACTION_FAILURE'],
   [/\bOLE\b|overhead line.*damage|dewirement|pantograph/i,                         'INFRASTRUCTURE'],
   [/track circuit.*fail|axle counter.*fail|points failure|signalling failure|signal.*fault|loss of signalling/i, 'INFRASTRUCTURE'],
   [/PICOP|T3-D\b|signalling disconnection/i,                                       'POSSESSION'],
@@ -285,22 +285,21 @@ function parseIncidentBlock(
   }
 
   // ── Title-based overrides: correct common CCIL miscoding ──────────────────
-  // Assaults miscoded as PERSON_STRUCK (type codes 13/87) → CRIME
+  // Assaults/accidents miscoded as PERSON_STRUCK (type codes 13/87) → PASSENGER_INJURY
   if (category === 'PERSON_STRUCK' &&
-      /verbal assault|assault on staff|staff.*assault|anti.?social|harassment/i.test(searchText)) {
-    category = 'CRIME'
-  }
-  // Accidents on trains miscoded as PERSON_STRUCK → PASSENGER_INJURY
-  if (category === 'PERSON_STRUCK' &&
-      /accident.*train|accident.*platform|slip|trip|fell/i.test(title) &&
+      /verbal assault|assault on staff|staff.*assault|anti.?social|harassment|accident.*train|accident.*platform|slip|trip|fell/i.test(searchText) &&
       !/struck.*train|by.*train/i.test(title)) {
     category = 'PASSENGER_INJURY'
   }
   // Mechanical/door faults miscoded as DERAILMENT (type code 10) → TRAIN_FAULT
   if (category === 'DERAILMENT' &&
-      /door fault|door failure|unit.*fault|unit.*defect|train.*defect|on.?board|mechanical/i.test(title) &&
+      /door fault|door failure|unit.*fault|unit.*defect|train.*defect|on.?board|mechanical|bogie/i.test(title) &&
       !/derail|divided|runaway/i.test(title)) {
     category = 'TRAIN_FAULT'
+  }
+  // Near miss incidents miscoded as HABD (type code 08) → NEAR_MISS
+  if (category === 'HABD_WILD' && /near.?miss/i.test(title)) {
+    category = 'NEAR_MISS'
   }
 
   let severity: Severity = 'LOW'

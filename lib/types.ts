@@ -106,7 +106,7 @@ export const CATEGORY_CONFIG: Record<IncidentCategory, {
   PASSENGER_INJURY:  { label: 'Passenger / Public Injury', shortLabel: 'PAX INJ', color: '#E05206', priority: 12, showInSummary: true  },
   DERAILMENT:        { label: 'Derailment / Collision',    shortLabel: 'DERL',    color: '#E74C3C', priority: 13, showInSummary: true  },
   INFRASTRUCTURE:    { label: 'Infrastructure Failure',    shortLabel: 'INFRA',   color: '#4A6FA5', priority: 14, showInSummary: false },
-  TRACTION_FAILURE:  { label: 'Traction Failure',          shortLabel: 'TRACT',   color: '#4A6FA5', priority: 15, showInSummary: false },
+  TRACTION_FAILURE:  { label: 'OHL / Traction Current Failure', shortLabel: 'OLE',  color: '#4A6FA5', priority: 15, showInSummary: false },
   TRAIN_FAULT:       { label: 'Train Fault / Failure',     shortLabel: 'TFLT',    color: '#6B7FA5', priority: 16, showInSummary: false },
   POSSESSION:        { label: 'Possession Issue',          shortLabel: 'POSS',    color: '#4A6FA5', priority: 17, showInSummary: false },
   STATION_OVERRUN:   { label: 'Station Overrun',           shortLabel: 'OVRUN',   color: '#7A8BA8', priority: 18, showInSummary: false },
