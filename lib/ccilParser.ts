@@ -314,13 +314,8 @@ function parseIncidentBlock(
   const nrEvent = events.find(e => e.company === 'NR' && e.description.length > 50)
   const description = (nrEvent || events[0])?.description?.replace(/\s+/g, ' ').trim() || title
 
-  // ── Highlight flag ─────────────────────────────────────────────────────────
-  const highlightCats: IncidentCategory[] = [
-    'FATALITY', 'PERSON_STRUCK', 'SPAD', 'FIRE', 'BRIDGE_STRIKE',
-    'NEAR_MISS', 'IRREGULAR_WORKING', 'CRIME', 'HABD_WILD',
-    'DERAILMENT', 'LEVEL_CROSSING', 'PASSENGER_INJURY',
-  ]
-  const isHighlight = highlightCats.includes(category) || minutesDelay > 1000 || cancelled > 10
+  // ── Highlight flag — assigned in parseCCILText after all incidents are known ──
+  const isHighlight = false
 
   return {
     id: `ccil-${ccil}`,
@@ -398,6 +393,16 @@ export function parseCCILText(rawText: string): Incident[] {
     const d = sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity)
     return d !== 0 ? d : (b.minutesDelay || 0) - (a.minutesDelay || 0)
   })
+
+  // ── Auto-highlight: top 5 incidents with delay > 100 min ──────────────────
+  const highlighted = new Set(
+    [...incidents]
+      .filter(i => (i.minutesDelay || 0) > 100)
+      .sort((a, b) => (b.minutesDelay || 0) - (a.minutesDelay || 0))
+      .slice(0, 5)
+      .map(i => i.id)
+  )
+  incidents.forEach(i => { i.isHighlight = highlighted.has(i.id) })
 
   return incidents
 }
