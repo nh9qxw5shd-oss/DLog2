@@ -13,6 +13,7 @@ export type IncidentCategory =
   | 'CRIME'
   | 'INFRASTRUCTURE'
   | 'TRACTION_FAILURE'
+  | 'TRAIN_FAULT'
   | 'DERAILMENT'
   | 'POSSESSION'
   | 'STATION_OVERRUN'
@@ -106,11 +107,12 @@ export const CATEGORY_CONFIG: Record<IncidentCategory, {
   DERAILMENT:        { label: 'Derailment / Collision',    shortLabel: 'DERL',    color: '#E74C3C', priority: 13, showInSummary: true  },
   INFRASTRUCTURE:    { label: 'Infrastructure Failure',    shortLabel: 'INFRA',   color: '#4A6FA5', priority: 14, showInSummary: false },
   TRACTION_FAILURE:  { label: 'Traction Failure',          shortLabel: 'TRACT',   color: '#4A6FA5', priority: 15, showInSummary: false },
-  POSSESSION:        { label: 'Possession Issue',          shortLabel: 'POSS',    color: '#4A6FA5', priority: 16, showInSummary: false },
-  STATION_OVERRUN:   { label: 'Station Overrun',           shortLabel: 'OVRUN',   color: '#7A8BA8', priority: 17, showInSummary: false },
-  STRANDED_TRAIN:    { label: 'Stranded Train',            shortLabel: 'STRAND',  color: '#7A8BA8', priority: 18, showInSummary: false },
-  WEATHER:           { label: 'Weather Event',             shortLabel: 'WX',      color: '#4A6FA5', priority: 19, showInSummary: false },
-  GENERAL:           { label: 'General / Other',           shortLabel: 'GEN',     color: '#4A6FA5', priority: 20, showInSummary: false },
+  TRAIN_FAULT:       { label: 'Train Fault / Failure',     shortLabel: 'TFLT',    color: '#6B7FA5', priority: 16, showInSummary: false },
+  POSSESSION:        { label: 'Possession Issue',          shortLabel: 'POSS',    color: '#4A6FA5', priority: 17, showInSummary: false },
+  STATION_OVERRUN:   { label: 'Station Overrun',           shortLabel: 'OVRUN',   color: '#7A8BA8', priority: 18, showInSummary: false },
+  STRANDED_TRAIN:    { label: 'Stranded Train',            shortLabel: 'STRAND',  color: '#7A8BA8', priority: 19, showInSummary: false },
+  WEATHER:           { label: 'Weather Event',             shortLabel: 'WX',      color: '#4A6FA5', priority: 20, showInSummary: false },
+  GENERAL:           { label: 'General / Other',           shortLabel: 'GEN',     color: '#4A6FA5', priority: 21, showInSummary: false },
 }
 
 // ─── Default EMCC Roster ──────────────────────────────────────────────────────

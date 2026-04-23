@@ -17,8 +17,10 @@ const CATEGORY_PATTERNS: Array<[RegExp, IncidentCategory]> = [
   [/lineside fire|fire.*lineside|fire.*track|fire.*sleeper|fire.*vegetation/i,     'FIRE'],
   [/trespass|theft|robbery|graffiti|vandal/i,                                      'CRIME'],
   [/level crossing|AHB\b|MCG\b|AOCL\b|AHBC\b|crossing.*misuse|crossing.*failure/i,'LEVEL_CROSSING'],
+  [/verbal assault|assault on staff|staff.*assault|crew.*assault|anti.?social behaviour/i, 'CRIME'],
   [/passenger.*injur|injur.*passenger|public.*injur|person.*fell.*track/i,         'PASSENGER_INJURY'],
   [/assault.*passenger|passenger.*assault/i,                                       'PASSENGER_INJURY'],
+  [/door fault|door failure|unit fault|unit defect|on.?train fault|train.*defect|defective.*unit/i, 'TRAIN_FAULT'],
   [/traction failure|unit.*failure|VCB not closing|AWS brake demand|bogie.*fault/i,'TRACTION_FAILURE'],
   [/\bOLE\b|overhead line.*damage|dewirement|pantograph/i,                         'INFRASTRUCTURE'],
   [/track circuit.*fail|axle counter.*fail|points failure|signalling failure|signal.*fault|loss of signalling/i, 'INFRASTRUCTURE'],
@@ -33,7 +35,7 @@ const SEVERITY_RULES: Array<[IncidentCategory[], Severity]> = [
   [['SPAD', 'FIRE', 'BRIDGE_STRIKE'],                                   'HIGH'],
   [['TPWS', 'NEAR_MISS', 'IRREGULAR_WORKING', 'HABD_WILD'],            'MEDIUM'],
   [['CRIME', 'LEVEL_CROSSING', 'PASSENGER_INJURY', 'TRACTION_FAILURE'], 'MEDIUM'],
-  [['INFRASTRUCTURE', 'POSSESSION', 'STATION_OVERRUN'],                 'LOW'],
+  [['INFRASTRUCTURE', 'POSSESSION', 'STATION_OVERRUN', 'TRAIN_FAULT'],  'LOW'],
   [['STRANDED_TRAIN', 'WEATHER', 'GENERAL'],                            'INFO'],
 ]
 
@@ -125,13 +127,14 @@ const TYPE_CODE_MAP: Array<[RegExp, IncidentCategory]> = [
   // ── 50s: train/depot operational codes ────────────────────────────────────
   [/^52\s/i,          'LEVEL_CROSSING'],   // 52 Level crossing failure
   [/^53\s/i,          'GENERAL'],          // 53 Depot operating issues
-  [/^5[45]\s/i,       'TRACTION_FAILURE'], // 54 On-train defect, 55 Train failure on depot
+  [/^54\s/i,          'TRAIN_FAULT'],      // 54 On-train defect
+  [/^55\s/i,          'TRAIN_FAULT'],      // 55 Train failure on depot
   [/^58\s/i,          'INFRASTRUCTURE'],   // 58 Signal obscured
   [/^59\s/i,          'GENERAL'],          // 59 Staff issues
   // ── 60s–80s: operational/admin ─────────────────────────────────────────────
   [/^64\s/i,          'INFRASTRUCTURE'],   // 64 Station infrastructure
   [/^70\s/i,          'CRIME'],            // 70 Security issues
-  [/^71\s/i,          'TRACTION_FAILURE'], // 71 On-train defect (RB)
+  [/^71\s/i,          'TRAIN_FAULT'],       // 71 On-train defect (RB)
   [/^73\s/i,          'GENERAL'],          // 73 Passenger matters
   [/^78\s/i,          'GENERAL'],          // 78 Actions to improve performance
   [/^87\s/i,          'PERSON_STRUCK'],    // 87 Person struck by train
@@ -281,11 +284,31 @@ function parseIncidentBlock(
     }
   }
 
+  // ── Title-based overrides: correct common CCIL miscoding ──────────────────
+  // Assaults miscoded as PERSON_STRUCK (type codes 13/87) → CRIME
+  if (category === 'PERSON_STRUCK' &&
+      /verbal assault|assault on staff|staff.*assault|anti.?social|harassment/i.test(searchText)) {
+    category = 'CRIME'
+  }
+  // Accidents on trains miscoded as PERSON_STRUCK → PASSENGER_INJURY
+  if (category === 'PERSON_STRUCK' &&
+      /accident.*train|accident.*platform|slip|trip|fell/i.test(title) &&
+      !/struck.*train|by.*train/i.test(title)) {
+    category = 'PASSENGER_INJURY'
+  }
+  // Mechanical/door faults miscoded as DERAILMENT (type code 10) → TRAIN_FAULT
+  if (category === 'DERAILMENT' &&
+      /door fault|door failure|unit.*fault|unit.*defect|train.*defect|on.?board|mechanical/i.test(title) &&
+      !/derail|divided|runaway/i.test(title)) {
+    category = 'TRAIN_FAULT'
+  }
+
   let severity: Severity = 'LOW'
   for (const [cats, sev] of SEVERITY_RULES) {
     if (cats.includes(category)) { severity = sev; break }
   }
-  if (severity === 'LOW' && minutesDelay > 2000) severity = 'HIGH'
+  if (severity === 'LOW' && minutesDelay > 2000) severity = 'CRITICAL'
+  else if (severity === 'LOW' && minutesDelay > 1000) severity = 'HIGH'
   else if (severity === 'LOW' && minutesDelay > 500) severity = 'MEDIUM'
 
   // ── Best description ───────────────────────────────────────────────────────

@@ -291,6 +291,7 @@ export async function generatePDF(log: LogState): Promise<void> {
     { label: 'DERAILMENTS & COLLISIONS',                filter: i => i.category === 'DERAILMENT'        },
     { label: 'INFRASTRUCTURE FAILURES',                 filter: i => i.category === 'INFRASTRUCTURE'    },
     { label: 'TRACTION FAILURES',                       filter: i => i.category === 'TRACTION_FAILURE'  },
+    { label: 'TRAIN FAULTS & FAILURES',                 filter: i => i.category === 'TRAIN_FAULT'       },
     { label: 'POSSESSION ISSUES',                       filter: i => i.category === 'POSSESSION'        },
   ]
 
