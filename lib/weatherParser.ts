@@ -1,4 +1,4 @@
-import type { HazardLevel, DayWeather, FiveDayWeather } from './types'
+import type { HazardLevel, DayWeather, FiveDayWeather, SectionDebug } from './types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -96,9 +96,13 @@ const rtext = (row: TItem[]) => row.map(i => i.str).join(' ')
 // which breaks when Max Temp / Min Temp appear in the sub-header row instead
 // of the main column header row.
 
-function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
+function parseSection(
+  allRows: TItem[][],
+  startIdx: number,
+): { days: DayWeather[]; debug: SectionDebug } {
   const DAY_RE = /^(mon|tue|wed|thu|fri|sat|sun)/i
   const results: DayWeather[] = []
+  const debug: SectionDebug = { colHeaderRowIdx: -1, colHeaders: [], dayRows: [] }
 
   // ── Step 1: find the column name header row (first row containing "Wind")
   let colNameItems: Array<{ x: number; label: string }> = []
@@ -107,8 +111,6 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
     const rowStr = rtext(allRows[i])
     if (!/wind/i.test(rowStr)) continue
 
-    // Extract column-label items from this row by matching the first
-    // distinctive key of each COLUMN_LABELS entry.
     const candidates: Array<{ x: number; label: string }> = []
     for (const item of allRows[i]) {
       const lower = item.str.toLowerCase()
@@ -118,9 +120,7 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
       }
     }
 
-    // Also scan the sub-header row immediately below (contains
-    // "Max Temp (06-18)" and "Min Temp (18-06)" which are NOT in the
-    // column header row) — look within the next 4 rows.
+    // Also include items from the next 4 rows (sub-header may hold Max/Min Temp).
     for (let j = i + 1; j < Math.min(i + 5, allRows.length); j++) {
       for (const item of allRows[j]) {
         const lower = item.str.toLowerCase()
@@ -132,7 +132,9 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
     }
 
     if (candidates.length >= 3) {
-      colNameItems = candidates
+      colNameItems          = candidates
+      debug.colHeaderRowIdx = i
+      debug.colHeaders      = candidates
       break
     }
   }
@@ -142,7 +144,6 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
     const row = allRows[i]
     if (!row.length) continue
 
-    // The day name is the leftmost text item in the row.
     const sorted  = [...row].sort((a, b) => a.x - b.x)
     const first   = sorted[0]?.str ?? ''
     if (!DAY_RE.test(first)) continue
@@ -150,10 +151,17 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
     const dayKey  = first.slice(0, 3).toLowerCase()
     const dayFull = DAY_MAP[dayKey] ?? first
 
-    const alerts = row.filter(it => ALERT_RE.test(it.str))
+    const alerts    = row.filter(it => ALERT_RE.test(it.str))
+    const dbgAlerts: Array<{ x: number; str: string; mappedTo: string }> = []
 
     if (!alerts.length) {
       results.push({ day: dayFull, level: 'GREEN', triggers: [] })
+      debug.dayRows.push({
+        rowIdx: i,
+        day:    dayFull,
+        items:  sorted.map(it => ({ x: it.x, str: it.str })),
+        alerts: [],
+      })
       continue
     }
 
@@ -164,7 +172,7 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
       const lvl = alert.str.toUpperCase() as HazardLevel
       if (HAZARD_RANK[lvl] > HAZARD_RANK[topLevel]) topLevel = lvl
 
-      // Map to nearest column label by x-distance.
+      let mappedTo = ''
       if (colNameItems.length) {
         let nearest = colNameItems[0]
         let minDist = Math.abs(alert.x - nearest.x)
@@ -173,13 +181,21 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
           if (d < minDist) { minDist = d; nearest = col }
         }
         triggerSet.add(nearest.label)
+        mappedTo = nearest.label
       }
+      dbgAlerts.push({ x: alert.x, str: alert.str, mappedTo })
     }
 
     results.push({ day: dayFull, level: topLevel, triggers: Array.from(triggerSet) })
+    debug.dayRows.push({
+      rowIdx: i,
+      day:    dayFull,
+      items:  sorted.map(it => ({ x: it.x, str: it.str })),
+      alerts: dbgAlerts,
+    })
   }
 
-  return results
+  return { days: results, debug }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -199,13 +215,26 @@ export async function parseWeatherPDF(file: File): Promise<FiveDayWeather> {
     return /summary\s+hazards/i.test(t) && /london\s+north/i.test(t)
   })
 
-  const eastMidlands = emIdx >= 0 ? parseSection(rows, emIdx + 1) : []
-  const londonNorth  = lnIdx >= 0 ? parseSection(rows, lnIdx + 1) : []
+  const em = emIdx >= 0 ? parseSection(rows, emIdx + 1) : null
+  const ln = lnIdx >= 0 ? parseSection(rows, lnIdx + 1) : null
 
   const issuedRow = rows.find(r => /issued\s+on/i.test(rtext(r)))
   const issuedBy  = issuedRow ? rtext(issuedRow).replace(/^.*?issued\s+on\s+/i, '') : undefined
 
-  return { eastMidlands, londonNorth, issuedBy }
+  return {
+    eastMidlands: em?.days ?? [],
+    londonNorth:  ln?.days ?? [],
+    issuedBy,
+    debug: {
+      totalItems: items.length,
+      totalRows:  rows.length,
+      emSectionRowIdx: emIdx,
+      lnSectionRowIdx: lnIdx,
+      emSection:  em?.debug,
+      lnSection:  ln?.debug,
+      sampleRows: rows.slice(0, 40).map((r, i) => `[${i}] ${rtext(r)}`),
+    },
+  }
 }
 
 // ─── Derive day names from a log date when no PDF is uploaded ─────────────────

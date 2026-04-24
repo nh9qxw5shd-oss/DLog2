@@ -13,7 +13,7 @@ import {
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
 import { parseWeatherPDF, deriveDaysFromDate } from '@/lib/weatherParser'
-import type { FiveDayWeather, HazardLevel } from '@/lib/types'
+import type { FiveDayWeather, HazardLevel, WeatherParseDebug } from '@/lib/types'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -239,6 +239,65 @@ function HazardBadge({ level, triggers }: { level: HazardLevel; triggers: string
   )
 }
 
+// ─── Parser debug viewer (for diagnosing weather PDF parse issues) ───────────
+
+function ParserDebugView({ debug }: { debug: WeatherParseDebug }) {
+  return (
+    <details className="mt-2 border border-[rgba(74,111,165,0.2)] rounded p-2 bg-[#0A0F1E]">
+      <summary className="text-[10px] text-[#7A8BA8] font-mono cursor-pointer hover:text-white">
+        Parser diagnostics — click to expand
+      </summary>
+      <div className="mt-2 space-y-3 text-[10px] font-mono text-[#7A8BA8] max-h-96 overflow-y-auto">
+        <div>
+          <div className="text-[#4A6FA5] font-semibold mb-1">Overview</div>
+          <div>items: {debug.totalItems} · rows: {debug.totalRows}</div>
+          <div>EM section at row: {debug.emSectionRowIdx} · LN section at row: {debug.lnSectionRowIdx}</div>
+        </div>
+
+        {(['emSection', 'lnSection'] as const).map(key => {
+          const sec = debug[key]
+          if (!sec) return null
+          const label = key === 'emSection' ? 'East Midlands' : 'London North'
+          return (
+            <div key={key} className="border-t border-[rgba(74,111,165,0.15)] pt-2">
+              <div className="text-[#4A6FA5] font-semibold mb-1">{label}</div>
+              <div className="mb-1">col-header row: {sec.colHeaderRowIdx} · cols: {sec.colHeaders.length}</div>
+              <div className="mb-2 text-[9px]">
+                {sec.colHeaders.map((c, i) => (
+                  <span key={i} className="mr-2">{c.label}@x={c.x}</span>
+                ))}
+              </div>
+              {sec.dayRows.length === 0 && <div className="text-red-400">No day rows detected!</div>}
+              {sec.dayRows.map((dr, i) => (
+                <div key={i} className="mb-1.5 pb-1.5 border-b border-[rgba(74,111,165,0.1)]">
+                  <div>
+                    <span className="text-[#E05206]">{dr.day}</span> (row {dr.rowIdx})
+                  </div>
+                  <div className="text-[9px] text-[#4A5A72] break-all">
+                    items: {dr.items.map(it => `[${it.x}:${it.str}]`).join(' ')}
+                  </div>
+                  {dr.alerts.length > 0 && (
+                    <div className="text-[9px] text-[#27AE60]">
+                      alerts: {dr.alerts.map(a => `${a.str}@x=${a.x}→${a.mappedTo || '(none)'}`).join(', ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        })}
+
+        <div className="border-t border-[rgba(74,111,165,0.15)] pt-2">
+          <div className="text-[#4A6FA5] font-semibold mb-1">First 40 rows (as text)</div>
+          {debug.sampleRows.map((r, i) => (
+            <div key={i} className="text-[9px] break-all text-[#4A5A72]">{r}</div>
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
 // ─── 5 Day Look Ahead config component ───────────────────────────────────────
 
 function FiveDaySection({ log, onChange }: {
@@ -346,6 +405,7 @@ function FiveDaySection({ log, onChange }: {
             {weather.issuedBy && (
               <p className="text-[#4A5A72] text-[10px] font-mono mt-1.5 truncate">Issued: {weather.issuedBy}</p>
             )}
+            {weather.debug && <ParserDebugView debug={weather.debug} />}
           </div>
         )}
 

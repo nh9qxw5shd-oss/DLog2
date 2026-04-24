@@ -12,6 +12,28 @@ export interface FiveDayWeather {
   eastMidlands: DayWeather[]
   londonNorth: DayWeather[]
   issuedBy?: string
+  debug?: WeatherParseDebug
+}
+
+export interface WeatherParseDebug {
+  totalItems: number
+  totalRows: number
+  emSectionRowIdx: number
+  lnSectionRowIdx: number
+  emSection?: SectionDebug
+  lnSection?: SectionDebug
+  sampleRows: string[]     // first 40 rows joined as text — for context
+}
+
+export interface SectionDebug {
+  colHeaderRowIdx: number
+  colHeaders: Array<{ x: number; label: string }>
+  dayRows: Array<{
+    rowIdx: number
+    day: string
+    items: Array<{ x: number; str: string }>
+    alerts: Array<{ x: number; str: string; mappedTo: string }>
+  }>
 }
 
 // ─── Incident Types ───────────────────────────────────────────────────────────
