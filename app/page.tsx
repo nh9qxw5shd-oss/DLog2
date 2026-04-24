@@ -10,7 +10,7 @@ import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
   DEFAULT_ROSTER, CATEGORY_CONFIG, IncidentCategory,
   HazardLevel, RiskLevel, WeatherRisk, DayWeather,
-  WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveDaysFromDate,
+  WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveUpcomingDays,
   makeEmptyFiveDayWeather, makeEmptyLookAheadNotes,
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
@@ -343,7 +343,11 @@ function FiveDaySection({ log, onChange }: {
 
   const weather = log.fiveDayWeather
   const notes   = log.lookAheadNotes
-  const days    = deriveDaysFromDate(log.date)
+
+  // Forward-looking: always starts at today's day-of-week. Populated after
+  // mount so the initial server-rendered markup stays deterministic.
+  const [days, setDays] = useState<string[]>(['', '', '', '', ''])
+  useEffect(() => { setDays(deriveUpcomingDays()) }, [])
 
   const updateNote = (key: keyof typeof notes, dayIdx: number, val: string) => {
     const next = [...notes[key]]
@@ -535,7 +539,7 @@ function RosterStep({ log, onChange, onNext, onBack }: {
   )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-white mb-1">Shift Roster</h2>
         <p className="text-sm text-[#7A8BA8]">Enter staff on duty. This appears at the top of the PDF.</p>
@@ -559,8 +563,10 @@ function RosterStep({ log, onChange, onNext, onBack }: {
 
       <FiveDaySection log={log} onChange={onChange} />
 
-      {renderShiftTable('dayShift', '◑  Day Shift')}
-      {renderShiftTable('nightShift', '◐  Night Shift')}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {renderShiftTable('dayShift',   '◑  Day Shift')}
+        {renderShiftTable('nightShift', '◐  Night Shift')}
+      </div>
 
       <div className="flex gap-3 pt-2">
         <button onClick={onBack} className="px-6 py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">

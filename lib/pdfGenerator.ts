@@ -2,7 +2,7 @@
 
 import {
   LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather,
-  deriveDaysFromDate, deriveWeatherLevel,
+  deriveUpcomingDays, deriveWeatherLevel,
 } from './types'
 
 type RGB = [number, number, number]
@@ -140,7 +140,7 @@ export async function generatePDF(log: LogState): Promise<void> {
     const labelW = 50
     const dayW   = (tableW - labelW) / 5
 
-    const days   = deriveDaysFromDate(log.date)
+    const days   = deriveUpcomingDays()
     const emDays = fw.eastMidlands
     const lnDays = fw.londonNorth
 

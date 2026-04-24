@@ -58,6 +58,18 @@ export function deriveDaysFromDate(isoDate: string): string[] {
   }
 }
 
+// The 5 Day Look Ahead is forward-looking from the moment the report is
+// compiled, not from the log's reporting period. Always starts at "today".
+// NB: calls Date() — only invoke on the client (guard with useEffect in SSR).
+export function deriveUpcomingDays(): string[] {
+  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+  const today = new Date()
+  return Array.from({ length: 5 }, (_, i) => {
+    const dt = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)
+    return DAYS[dt.getDay()]
+  })
+}
+
 export function makeEmptyFiveDayWeather(): FiveDayWeather {
   const day = (): DayWeather => ({ risks: {} })
   return {
