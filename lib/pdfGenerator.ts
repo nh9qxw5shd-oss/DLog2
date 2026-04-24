@@ -311,17 +311,17 @@ export async function generatePDF(log: LogState): Promise<void> {
 
   y = drawCoverHeader()
 
-  // ── 0. 5 Day Look Ahead ───────────────────────────────────────────────────
-  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
-  drawFiveDayLookAhead()
-
-  // ── 1. Roster ─────────────────────────────────────────────────────────────
+  // ── 0. Roster ─────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)
   const rosterStartY = y
   const dayEnd   = drawRosterHalf(log.roster.dayShift,   'DAY SHIFT',   0)
   y = rosterStartY
   const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
+
+  // ── 1. 5 Day Look Ahead ───────────────────────────────────────────────────
+  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
+  drawFiveDayLookAhead()
 
   // ── 2. Safety infographic ─────────────────────────────────────────────────
   newPage()
