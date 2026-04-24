@@ -90,11 +90,17 @@ const rtext = (row: TItem[]) => row.map(i => i.str).join(' ')
 
 // ─── Table section parser ─────────────────────────────────────────────────────
 //
-// Strategy: find the column-name header row by looking for "Wind" text, then
-// map each alert keyword (Aware/Adverse/Extreme) to its column label using
-// x-distance from the column header items.  This avoids index-based pairing
-// which breaks when Max Temp / Min Temp appear in the sub-header row instead
-// of the main column header row.
+// Strategy:
+//   1. Locate the column-name header row by looking for "Wind" text, and build
+//      a list of column-label x-positions (also scanning the sub-header row so
+//      Max Temp / Min Temp x-positions are captured).
+//   2. Collect the y-position of each day label in this section.
+//   3. For each day, treat [this day's yTop, next day's yTop) as its vertical
+//      band and gather every Aware/Adverse/Extreme item whose y falls inside.
+//      This is necessary because the alert keywords are often placed a few
+//      pixels below the day label — outside the tight row-grouping tolerance —
+//      so a naïve same-row filter misattributes or drops them entirely.
+//   4. Map each alert to the nearest column header by x-distance.
 
 function parseSection(
   allRows: TItem[][],
@@ -139,27 +145,64 @@ function parseSection(
     }
   }
 
-  // ── Step 2: parse each day row
-  for (let i = startIdx; i < allRows.length && results.length < 5; i++) {
+  // ── Step 2: find this section's end (next "Summary Hazards" header or EOF)
+  //   so we never pull alerts out of the following route's table.
+  let endIdx = allRows.length
+  for (let i = startIdx; i < allRows.length; i++) {
+    if (/summary\s+hazards/i.test(rtext(allRows[i]))) {
+      endIdx = i
+      break
+    }
+  }
+
+  // ── Step 3: collect all day-label rows within this section
+  type DayRef = { idx: number; day: string; yTop: number; sorted: TItem[] }
+  const dayRefs: DayRef[] = []
+
+  for (let i = startIdx; i < endIdx && dayRefs.length < 5; i++) {
     const row = allRows[i]
     if (!row.length) continue
 
-    const sorted  = [...row].sort((a, b) => a.x - b.x)
-    const first   = sorted[0]?.str ?? ''
+    const sorted = [...row].sort((a, b) => a.x - b.x)
+    const first  = sorted[0]?.str ?? ''
     if (!DAY_RE.test(first)) continue
 
     const dayKey  = first.slice(0, 3).toLowerCase()
     const dayFull = DAY_MAP[dayKey] ?? first
+    dayRefs.push({ idx: i, day: dayFull, yTop: row[0].y, sorted })
+  }
 
-    const alerts    = row.filter(it => ALERT_RE.test(it.str))
+  // ── Step 4: for each day, pull alerts from every row whose y falls in its
+  //   [yTop, nextYTop) band — not just the single grouped row containing the
+  //   day label. Cap the last day's band at the section's terminating y.
+  const sectionEndY =
+    endIdx < allRows.length && allRows[endIdx]?.length
+      ? allRows[endIdx][0].y
+      : Number.POSITIVE_INFINITY
+
+  for (let k = 0; k < dayRefs.length; k++) {
+    const dr      = dayRefs[k]
+    const yLo     = dr.yTop
+    const yHi     = k + 1 < dayRefs.length ? dayRefs[k + 1].yTop : sectionEndY
+    const endRow  = k + 1 < dayRefs.length ? dayRefs[k + 1].idx : endIdx
+
+    const bandAlerts: TItem[] = []
+    for (let i = dr.idx; i < endRow; i++) {
+      for (const it of allRows[i]) {
+        if (it.y >= yLo && it.y < yHi && ALERT_RE.test(it.str)) {
+          bandAlerts.push(it)
+        }
+      }
+    }
+
     const dbgAlerts: Array<{ x: number; str: string; mappedTo: string }> = []
 
-    if (!alerts.length) {
-      results.push({ day: dayFull, level: 'GREEN', triggers: [] })
+    if (!bandAlerts.length) {
+      results.push({ day: dr.day, level: 'GREEN', triggers: [] })
       debug.dayRows.push({
-        rowIdx: i,
-        day:    dayFull,
-        items:  sorted.map(it => ({ x: it.x, str: it.str })),
+        rowIdx: dr.idx,
+        day:    dr.day,
+        items:  dr.sorted.map(it => ({ x: it.x, str: it.str })),
         alerts: [],
       })
       continue
@@ -168,7 +211,7 @@ function parseSection(
     let topLevel: HazardLevel = 'GREEN'
     const triggerSet = new Set<string>()
 
-    for (const alert of alerts) {
+    for (const alert of bandAlerts) {
       const lvl = alert.str.toUpperCase() as HazardLevel
       if (HAZARD_RANK[lvl] > HAZARD_RANK[topLevel]) topLevel = lvl
 
@@ -186,11 +229,11 @@ function parseSection(
       dbgAlerts.push({ x: alert.x, str: alert.str, mappedTo })
     }
 
-    results.push({ day: dayFull, level: topLevel, triggers: Array.from(triggerSet) })
+    results.push({ day: dr.day, level: topLevel, triggers: Array.from(triggerSet) })
     debug.dayRows.push({
-      rowIdx: i,
-      day:    dayFull,
-      items:  sorted.map(it => ({ x: it.x, str: it.str })),
+      rowIdx: dr.idx,
+      day:    dr.day,
+      items:  dr.sorted.map(it => ({ x: it.x, str: it.str })),
       alerts: dbgAlerts,
     })
   }
