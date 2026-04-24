@@ -1,39 +1,77 @@
 // ─── Weather / 5 Day Look Ahead ───────────────────────────────────────────────
 
 export type HazardLevel = 'GREEN' | 'AWARE' | 'ADVERSE' | 'EXTREME'
+export type RiskLevel   = Exclude<HazardLevel, 'GREEN'>
+
+export const WEATHER_RISK_OPTIONS = [
+  'Wind',
+  'Heavy Rain',
+  'Convective Rainfall',
+  'Lightning',
+  'Snow',
+  'Frost',
+  'Min Temp',
+  'Max Temp',
+  'Temp Range',
+  'Ice Day',
+] as const
+export type WeatherRisk = typeof WEATHER_RISK_OPTIONS[number]
 
 export interface DayWeather {
-  day: string        // 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Monday'
-  level: HazardLevel
-  triggers: string[] // e.g. ['Temp Range', 'Frost']
+  risks: Partial<Record<WeatherRisk, RiskLevel>>
 }
 
 export interface FiveDayWeather {
-  eastMidlands: DayWeather[]
-  londonNorth: DayWeather[]
-  issuedBy?: string
-  debug?: WeatherParseDebug
+  eastMidlands: DayWeather[]   // exactly 5 entries
+  londonNorth:  DayWeather[]   // exactly 5 entries
 }
 
-export interface WeatherParseDebug {
-  totalItems: number
-  totalRows: number
-  emSectionRowIdx: number
-  lnSectionRowIdx: number
-  emSection?: SectionDebug
-  lnSection?: SectionDebug
-  sampleRows: string[]     // first 40 rows joined as text — for context
+export interface LookAheadNotes {
+  risks: string[]              // exactly 5 entries, default 'Nil'
+  toc:   string[]
+  foc:   string[]
 }
 
-export interface SectionDebug {
-  colHeaderRowIdx: number
-  colHeaders: Array<{ x: number; label: string }>
-  dayRows: Array<{
-    rowIdx: number
-    day: string
-    items: Array<{ x: number; str: string }>
-    alerts: Array<{ x: number; str: string; mappedTo: string }>
-  }>
+const HAZARD_RANK: Record<HazardLevel, number> = {
+  GREEN: 0, AWARE: 1, ADVERSE: 2, EXTREME: 3,
+}
+
+export function deriveWeatherLevel(day: DayWeather): HazardLevel {
+  let max: HazardLevel = 'GREEN'
+  for (const lvl of Object.values(day.risks)) {
+    if (lvl && HAZARD_RANK[lvl] > HAZARD_RANK[max]) max = lvl
+  }
+  return max
+}
+
+export function deriveDaysFromDate(isoDate: string): string[] {
+  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+  if (!isoDate) return ['Day 1','Day 2','Day 3','Day 4','Day 5']
+  try {
+    const [y, m, d] = isoDate.split('-').map(Number)
+    return Array.from({ length: 5 }, (_, i) => {
+      const dt = new Date(y, m - 1, d + i)
+      return DAYS[dt.getDay()]
+    })
+  } catch {
+    return ['Day 1','Day 2','Day 3','Day 4','Day 5']
+  }
+}
+
+export function makeEmptyFiveDayWeather(): FiveDayWeather {
+  const day = (): DayWeather => ({ risks: {} })
+  return {
+    eastMidlands: Array.from({ length: 5 }, day),
+    londonNorth:  Array.from({ length: 5 }, day),
+  }
+}
+
+export function makeEmptyLookAheadNotes(): LookAheadNotes {
+  return {
+    risks: Array.from({ length: 5 }, () => 'Nil'),
+    toc:   Array.from({ length: 5 }, () => 'Nil'),
+    foc:   Array.from({ length: 5 }, () => 'Nil'),
+  }
 }
 
 // ─── Incident Types ───────────────────────────────────────────────────────────
@@ -118,12 +156,8 @@ export interface LogState {
   roster: RosterData
   incidents: Incident[]
   rawLogText?: string        // verbatim CCIL text for appendix
-  fiveDayWeather?: FiveDayWeather
-  lookAheadNotes: {
-    risks: string            // default 'Nil'
-    toc:   string            // default 'Nil'
-    foc:   string            // default 'Nil'
-  }
+  fiveDayWeather: FiveDayWeather
+  lookAheadNotes: LookAheadNotes
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 
