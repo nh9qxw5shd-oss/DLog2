@@ -8,12 +8,13 @@ import {
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
-  DEFAULT_ROSTER, CATEGORY_CONFIG, IncidentCategory
+  DEFAULT_ROSTER, CATEGORY_CONFIG, IncidentCategory,
+  HazardLevel, RiskLevel, WeatherRisk, DayWeather,
+  WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveUpcomingDays,
+  makeEmptyFiveDayWeather, makeEmptyLookAheadNotes,
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
-import { parseWeatherPDF, deriveDaysFromDate } from '@/lib/weatherParser'
-import type { FiveDayWeather, HazardLevel, WeatherParseDebug } from '@/lib/types'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -57,7 +58,8 @@ const BLANK_LOG: LogState = {
   controlCentre: 'East Midlands Control Centre (EMCC)',
   roster: DEFAULT_ROSTER,
   incidents: [],
-  lookAheadNotes: { risks: 'Nil', toc: 'Nil', foc: 'Nil' },
+  fiveDayWeather: makeEmptyFiveDayWeather(),
+  lookAheadNotes: makeEmptyLookAheadNotes(),
   status: 'empty',
 }
 
@@ -227,74 +229,106 @@ const HAZARD_TEXT: Record<HazardLevel, string> = {
   ADVERSE: 'text-[#001F45]',
   EXTREME: 'text-white',
 }
-
-function HazardBadge({ level, triggers }: { level: HazardLevel; triggers: string[] }) {
-  return (
-    <div className={`${HAZARD_BG[level]} ${HAZARD_TEXT[level]} rounded px-1 py-0.5 text-center leading-tight`}>
-      <div className="text-xs font-bold">{level}</div>
-      {triggers.length > 0 && (
-        <div className="text-[9px] font-normal opacity-90 mt-0.5">{triggers.join(', ')}</div>
-      )}
-    </div>
-  )
+const RISK_LEVEL_DOT: Record<RiskLevel, string> = {
+  AWARE:   'bg-[#F1C40F]',
+  ADVERSE: 'bg-[#E67E22]',
+  EXTREME: 'bg-[#C0392B]',
 }
 
-// ─── Parser debug viewer (for diagnosing weather PDF parse issues) ───────────
+// ─── Weather cell with inline risk editor ────────────────────────────────────
 
-function ParserDebugView({ debug }: { debug: WeatherParseDebug }) {
+function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
+  day:      DayWeather
+  isOpen:   boolean
+  onOpen:   () => void
+  onClose:  () => void
+  onToggle: (risk: WeatherRisk, level: RiskLevel | null) => void
+}) {
+  const level    = deriveWeatherLevel(day)
+  const selected = Object.entries(day.risks) as Array<[WeatherRisk, RiskLevel]>
+  const wrapRef  = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [isOpen, onClose])
+
   return (
-    <details className="mt-2 border border-[rgba(74,111,165,0.2)] rounded p-2 bg-[#0A0F1E]">
-      <summary className="text-[10px] text-[#7A8BA8] font-mono cursor-pointer hover:text-white">
-        Parser diagnostics — click to expand
-      </summary>
-      <div className="mt-2 space-y-3 text-[10px] font-mono text-[#7A8BA8] max-h-96 overflow-y-auto">
-        <div>
-          <div className="text-[#4A6FA5] font-semibold mb-1">Overview</div>
-          <div>items: {debug.totalItems} · rows: {debug.totalRows}</div>
-          <div>EM section at row: {debug.emSectionRowIdx} · LN section at row: {debug.lnSectionRowIdx}</div>
-        </div>
-
-        {(['emSection', 'lnSection'] as const).map(key => {
-          const sec = debug[key]
-          if (!sec) return null
-          const label = key === 'emSection' ? 'East Midlands' : 'London North'
-          return (
-            <div key={key} className="border-t border-[rgba(74,111,165,0.15)] pt-2">
-              <div className="text-[#4A6FA5] font-semibold mb-1">{label}</div>
-              <div className="mb-1">col-header row: {sec.colHeaderRowIdx} · cols: {sec.colHeaders.length}</div>
-              <div className="mb-2 text-[9px]">
-                {sec.colHeaders.map((c, i) => (
-                  <span key={i} className="mr-2">{c.label}@x={c.x}</span>
-                ))}
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          HAZARD_BG[level], HAZARD_TEXT[level],
+          'w-full min-h-[42px] rounded px-1 py-1 text-left leading-tight',
+          'hover:ring-2 hover:ring-white transition-all',
+          isOpen && 'ring-2 ring-white',
+        )}
+      >
+        {level === 'GREEN' ? (
+          <div className="text-center text-[10px] font-medium opacity-80">—</div>
+        ) : (
+          <>
+            <div className="text-[10px] font-bold text-center">{level}</div>
+            {selected.length > 0 && (
+              <div className="text-[8.5px] opacity-90 text-center break-words">
+                {selected.map(([r]) => r).join(', ')}
               </div>
-              {sec.dayRows.length === 0 && <div className="text-red-400">No day rows detected!</div>}
-              {sec.dayRows.map((dr, i) => (
-                <div key={i} className="mb-1.5 pb-1.5 border-b border-[rgba(74,111,165,0.1)]">
-                  <div>
-                    <span className="text-[#E05206]">{dr.day}</span> (row {dr.rowIdx})
-                  </div>
-                  <div className="text-[9px] text-[#4A5A72] break-all">
-                    items: {dr.items.map(it => `[${it.x}:${it.str}]`).join(' ')}
-                  </div>
-                  {dr.alerts.length > 0 && (
-                    <div className="text-[9px] text-[#27AE60]">
-                      alerts: {dr.alerts.map(a => `${a.str}@x=${a.x}→${a.mappedTo || '(none)'}`).join(', ')}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )
-        })}
+            )}
+          </>
+        )}
+      </button>
 
-        <div className="border-t border-[rgba(74,111,165,0.15)] pt-2">
-          <div className="text-[#4A6FA5] font-semibold mb-1">First 40 rows (as text)</div>
-          {debug.sampleRows.map((r, i) => (
-            <div key={i} className="text-[9px] break-all text-[#4A5A72]">{r}</div>
-          ))}
+      {isOpen && (
+        <div className="absolute z-50 top-full mt-1 left-0 w-60 bg-[#0F1629] border border-[rgba(74,111,165,0.4)] rounded p-2 shadow-xl">
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {WEATHER_RISK_OPTIONS.map(risk => {
+              const current = day.risks[risk]
+              return (
+                <div key={risk} className="flex items-center justify-between gap-2 py-0.5">
+                  <label className="flex items-center gap-1.5 flex-1 cursor-pointer text-[11px] text-white">
+                    <input
+                      type="checkbox"
+                      className="accent-[#E05206]"
+                      checked={!!current}
+                      onChange={e => onToggle(risk, e.target.checked ? (current ?? 'AWARE') : null)}
+                    />
+                    {current && <span className={cn('w-2 h-2 rounded-full', RISK_LEVEL_DOT[current])} />}
+                    <span>{risk}</span>
+                  </label>
+                  <select
+                    disabled={!current}
+                    value={current ?? 'AWARE'}
+                    onChange={e => onToggle(risk, e.target.value as RiskLevel)}
+                    className={cn(
+                      'bg-[#0A0F1E] text-white text-[10px] px-1 py-0.5 rounded',
+                      'border border-[rgba(74,111,165,0.3)] disabled:opacity-40',
+                    )}
+                  >
+                    <option value="AWARE">AWARE</option>
+                    <option value="ADVERSE">ADVERSE</option>
+                    <option value="EXTREME">EXTREME</option>
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex justify-end pt-1.5 mt-1 border-t border-[rgba(74,111,165,0.2)]">
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-[10px] text-[#E05206] hover:text-white px-2 py-0.5"
+            >
+              Done
+            </button>
+          </div>
         </div>
-      </div>
-    </details>
+      )}
+    </div>
   )
 }
 
@@ -304,139 +338,126 @@ function FiveDaySection({ log, onChange }: {
   log:      LogState
   onChange: (updates: Partial<LogState>) => void
 }) {
-  const [parsing,  setParsing]  = useState(false)
-  const [error,    setError]    = useState('')
-  const [fileName, setFileName] = useState(log.fiveDayWeather ? 'Loaded' : '')
-  const inputRef = useRef<HTMLInputElement>(null)
+  type EditTarget = { route: 'eastMidlands' | 'londonNorth'; dayIdx: number }
+  const [editing, setEditing] = useState<EditTarget | null>(null)
 
   const weather = log.fiveDayWeather
   const notes   = log.lookAheadNotes
 
-  const updateNote = (key: keyof typeof notes, val: string) =>
-    onChange({ lookAheadNotes: { ...notes, [key]: val } })
+  // Forward-looking: always starts at today's day-of-week. Populated after
+  // mount so the initial server-rendered markup stays deterministic.
+  const [days, setDays] = useState<string[]>(['', '', '', '', ''])
+  useEffect(() => { setDays(deriveUpcomingDays()) }, [])
 
-  const handleFile = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Please upload a PDF file (Network Rail 5 day forecast)')
-      return
-    }
-    setError(''); setParsing(true); setFileName(file.name)
-    try {
-      const result = await parseWeatherPDF(file)
-      if (!result.eastMidlands.length && !result.londonNorth.length) {
-        setError('No East Midlands or London North hazard tables found. Ensure this is the Network Rail LNE & EM 5 day forecast PDF.')
-        setParsing(false)
-        return
-      }
-      onChange({ fiveDayWeather: result })
-    } catch (e: any) {
-      setError(e.message || 'Failed to parse weather PDF')
-    } finally {
-      setParsing(false)
-    }
+  const updateNote = (key: keyof typeof notes, dayIdx: number, val: string) => {
+    const next = [...notes[key]]
+    next[dayIdx] = val
+    onChange({ lookAheadNotes: { ...notes, [key]: next } })
   }
 
-  const days = weather?.eastMidlands.map(d => d.day) ?? []
+  const toggleRisk = (
+    route: 'eastMidlands' | 'londonNorth',
+    dayIdx: number,
+    risk: WeatherRisk,
+    level: RiskLevel | null,
+  ) => {
+    const routeDays = [...weather[route]]
+    const nextRisks = { ...routeDays[dayIdx].risks }
+    if (level === null) delete nextRisks[risk]
+    else nextRisks[risk] = level
+    routeDays[dayIdx] = { risks: nextRisks }
+    onChange({ fiveDayWeather: { ...weather, [route]: routeDays } })
+  }
+
+  const weatherRowRoutes: Array<{ key: 'eastMidlands' | 'londonNorth'; label: string }> = [
+    { key: 'eastMidlands', label: 'Weather East Midlands' },
+    { key: 'londonNorth',  label: 'Weather London North'  },
+  ]
+
+  const bottomTextRows: Array<{ key: 'toc' | 'foc'; label: string }> = [
+    { key: 'toc', label: 'TOC Operations & Depot start up' },
+    { key: 'foc', label: 'FOC Operations'                  },
+  ]
 
   return (
-    <div className="card p-4 space-y-4">
-      <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead</p>
-
-      {/* ── Weather PDF upload ── */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-[#4A5A72]">Weather forecast PDF (NR LNE &amp; EM 5 day)</p>
-          {weather && (
-            <button
-              onClick={() => { onChange({ fiveDayWeather: undefined }); setFileName('') }}
-              className="text-xs text-[#4A5A72] hover:text-red-400 transition-colors flex items-center gap-1">
-              <X size={11} /> Clear
-            </button>
-          )}
-        </div>
-
-        {!weather ? (
-          <div
-            className="border border-dashed border-[rgba(74,111,165,0.4)] rounded p-3 text-center cursor-pointer hover:border-[#4A6FA5] transition-colors"
-            onClick={() => inputRef.current?.click()}
-            onDragOver={e => e.preventDefault()}
-            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
-          >
-            <input ref={inputRef} type="file" accept=".pdf" className="hidden"
-              onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
-            {parsing ? (
-              <div className="flex items-center justify-center gap-2 text-[#7A8BA8] text-xs">
-                <Loader2 size={14} className="animate-spin" /> Parsing weather tables…
-              </div>
-            ) : (
-              <div className="flex items-center justify-center gap-2">
-                <FileText size={16} className="text-[#4A6FA5]" />
-                <p className="text-[#7A8BA8] text-xs">{fileName || 'Drop forecast PDF or click to browse'}</p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr>
-                  <th className="text-left px-2 py-1 text-[#7A8BA8] font-medium w-28" />
-                  {days.map(d => (
-                    <th key={d} className="text-center px-1 py-1 text-[#7A8BA8] font-medium text-[10px]">{d.slice(0, 3)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {([
-                  { label: 'East Midlands', data: weather.eastMidlands },
-                  { label: 'London North',  data: weather.londonNorth  },
-                ] as const).map(row => (
-                  <tr key={row.label}>
-                    <td className="px-2 py-1 text-[#7A8BA8] font-medium whitespace-nowrap text-[11px]">{row.label}</td>
-                    {row.data.map((d, i) => (
-                      <td key={i} className="px-1 py-1">
-                        <HazardBadge level={d.level} triggers={d.triggers} />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {weather.issuedBy && (
-              <p className="text-[#4A5A72] text-[10px] font-mono mt-1.5 truncate">Issued: {weather.issuedBy}</p>
-            )}
-            {weather.debug && <ParserDebugView debug={weather.debug} />}
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-start gap-2 p-2 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)]">
-            <AlertCircle size={12} className="text-red-400 mt-0.5 shrink-0" />
-            <p className="text-red-400 text-xs">{error}</p>
-          </div>
-        )}
+    <div className="card p-4 space-y-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead</p>
+        <p className="text-[10px] text-[#4A5A72]">Click a weather cell to pick risks &amp; severity · text cells are free-form (default Nil)</p>
       </div>
 
-      {/* ── Editable rows ── */}
-      <div className="space-y-2">
-        <p className="text-xs text-[#4A5A72]">Other rows (applied across all 5 days)</p>
-        <div className="grid grid-cols-3 gap-3">
-          {([
-            { key: 'risks' as const, label: 'Risks' },
-            { key: 'toc'   as const, label: 'TOC Operations & Depot' },
-            { key: 'foc'   as const, label: 'FOC Operations' },
-          ]).map(({ key, label }) => (
-            <div key={key}>
-              <label className="block text-[10px] text-[#7A8BA8] mb-1 font-medium uppercase tracking-wider">{label}</label>
-              <input
-                type="text"
-                value={notes[key]}
-                onChange={e => updateNote(key, e.target.value)}
-                className="w-full bg-[#0A0F1E] text-white text-xs px-2 py-1.5 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none"
-              />
-            </div>
-          ))}
-        </div>
+      <div className="overflow-visible">
+        <table className="w-full border-collapse table-fixed">
+          <thead>
+            <tr>
+              <th className="text-left px-2 py-1.5 w-36 text-[10px] text-[#4A6FA5] font-semibold uppercase tracking-wider bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)]">
+                East Midlands Route<br />5 Day Look Ahead
+              </th>
+              {days.map((d, i) => (
+                <th key={i} className="text-center px-1 py-1.5 text-[#7A8BA8] font-semibold text-[11px] bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)]">
+                  {d}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {/* Risks row */}
+            <tr>
+              <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
+                Risks
+              </td>
+              {notes.risks.map((v, i) => (
+                <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
+                  <input
+                    type="text"
+                    value={v}
+                    onChange={e => updateNote('risks', i, e.target.value)}
+                    className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded"
+                  />
+                </td>
+              ))}
+            </tr>
+
+            {/* Weather rows */}
+            {weatherRowRoutes.map(({ key, label }) => (
+              <tr key={key}>
+                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
+                  {label}
+                </td>
+                {weather[key].map((d, i) => (
+                  <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
+                    <WeatherCell
+                      day={d}
+                      isOpen={editing?.route === key && editing.dayIdx === i}
+                      onOpen={() => setEditing({ route: key, dayIdx: i })}
+                      onClose={() => setEditing(null)}
+                      onToggle={(risk, level) => toggleRisk(key, i, risk, level)}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+
+            {/* TOC / FOC rows */}
+            {bottomTextRows.map(({ key, label }) => (
+              <tr key={key}>
+                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
+                  {label}
+                </td>
+                {notes[key].map((v, i) => (
+                  <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
+                    <input
+                      type="text"
+                      value={v}
+                      onChange={e => updateNote(key, i, e.target.value)}
+                      className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded"
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -518,7 +539,7 @@ function RosterStep({ log, onChange, onNext, onBack }: {
   )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-white mb-1">Shift Roster</h2>
         <p className="text-sm text-[#7A8BA8]">Enter staff on duty. This appears at the top of the PDF.</p>
@@ -542,8 +563,10 @@ function RosterStep({ log, onChange, onNext, onBack }: {
 
       <FiveDaySection log={log} onChange={onChange} />
 
-      {renderShiftTable('dayShift', '◑  Day Shift')}
-      {renderShiftTable('nightShift', '◐  Night Shift')}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {renderShiftTable('dayShift',   '◑  Day Shift')}
+        {renderShiftTable('nightShift', '◐  Night Shift')}
+      </div>
 
       <div className="flex gap-3 pt-2">
         <button onClick={onBack} className="px-6 py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">
@@ -921,8 +944,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Incident summary infographics</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
-          {log.fiveDayWeather && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (weather parsed)</div>}
-          {!log.fiveDayWeather && <div className="flex items-center gap-2"><AlertCircle size={11} className="text-[#4A5A72]" /> 5 Day Look Ahead (no weather PDF — placeholder)</div>}
+          <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (manual entry)</div>
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
         </div>
       </div>

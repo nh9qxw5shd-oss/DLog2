@@ -1,7 +1,9 @@
 'use client'
 
-import { LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather } from './types'
-import { deriveDaysFromDate } from './weatherParser'
+import {
+  LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather,
+  deriveUpcomingDays, deriveWeatherLevel,
+} from './types'
 
 type RGB = [number, number, number]
 
@@ -132,24 +134,16 @@ export async function generatePDF(log: LogState): Promise<void> {
   // ── 5 Day Look Ahead table ────────────────────────────────────────────────
 
   const drawFiveDayLookAhead = () => {
-    const fw      = log.fiveDayWeather
-    const tableW  = W - M * 2
-    const labelW  = 50
-    const dayW    = (tableW - labelW) / 5
+    const fw     = log.fiveDayWeather
+    const notes  = log.lookAheadNotes
+    const tableW = W - M * 2
+    const labelW = 50
+    const dayW   = (tableW - labelW) / 5
 
-    // Resolve day column names: from parsed weather or derived from log date
-    const days: string[] = fw?.eastMidlands.length
-      ? fw.eastMidlands.map(d => d.day)
-      : deriveDaysFromDate(log.date)
+    const days   = deriveUpcomingDays()
+    const emDays = fw.eastMidlands
+    const lnDays = fw.londonNorth
 
-    // Pad both route arrays to exactly 5 entries
-    const pad = (arr: DayWeather[], keys: string[]): DayWeather[] =>
-      keys.map((day, i) => arr[i] ?? { day, level: 'GREEN', triggers: [] })
-
-    const emDays = pad(fw?.eastMidlands ?? [], days)
-    const lnDays = pad(fw?.londonNorth  ?? [], days)
-
-    // ── Helper: draw one table cell ──
     const cell = (
       cx: number, cy: number, w: number, h: number,
       bg: RGB, border: RGB = C.lightGray
@@ -169,29 +163,30 @@ export async function generatePDF(log: LogState): Promise<void> {
       const cx = M + labelW + i * dayW
       cell(cx, y, dayW, HDR_H, [225, 230, 237])
       sf('bold', 8); stc(C.navy)
-      // Abbrev if needed to fit
       const label = day.length > 9 ? day.slice(0, 3) : day
       tx(label, cx + dayW / 2, y + 13, { align: 'center' })
     })
     y += HDR_H
 
-    // ── Generic Nil/text row helper ──────────────────────────────────────────
-    const nilRow = (label: string, value: string, rowH = 12, labelBg: RGB = [232, 236, 241]) => {
+    // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────
+    const textRow = (label: string, values: string[], rowH = 12, labelBg: RGB = [232, 236, 241]) => {
       cell(M, y, labelW, rowH, labelBg)
       const llines = doc.splitTextToSize(label, labelW - 6)
       sf('bold', 7); stc(C.navy)
       tx(llines.slice(0, 2), M + 3, y + (rowH > 14 ? 7 : 4.5) + 1.5)
 
       for (let i = 0; i < 5; i++) {
-        const cx = M + labelW + i * dayW
+        const cx  = M + labelW + i * dayW
+        const val = (values[i] ?? '').trim() || 'Nil'
         cell(cx, y, dayW, rowH, C.offWhite)
         sf('bold', 8); stc(C.darkGray)
-        tx(value, cx + dayW / 2, y + rowH / 2 + 2.5, { align: 'center' })
+        const lines = doc.splitTextToSize(val, dayW - 3)
+        tx(lines.slice(0, 2), cx + dayW / 2, y + rowH / 2 + 1.5, { align: 'center' })
       }
       y += rowH
     }
 
-    // ── Weather row helper ────────────────────────────────────────────────────
+    // ── Weather row: per-cell derived level + risk-name triggers ──────────
     const weatherRow = (label: string, weatherDays: DayWeather[], rowH = 26) => {
       cell(M, y, labelW, rowH, [232, 236, 241])
       const llines = doc.splitTextToSize(label, labelW - 6)
@@ -199,32 +194,31 @@ export async function generatePDF(log: LogState): Promise<void> {
 
       weatherDays.forEach((wd, i) => {
         const cx    = M + labelW + i * dayW
-        const bg    = HAZARD_BG[wd.level]
-        const fg    = HAZARD_FG[wd.level]
+        const level = deriveWeatherLevel(wd)
+        const bg    = HAZARD_BG[level]
+        const fg    = HAZARD_FG[level]
         cell(cx, y, dayW, rowH, bg)
 
-        // Level label
-        sf('bold', 8); stc(fg)
-        tx(wd.level, cx + dayW / 2, y + 9, { align: 'center' })
+        if (level === 'GREEN') { return }
 
-        // Triggers (wrapped, smaller font)
-        if (wd.triggers.length) {
-          const trigStr = wd.triggers.join(', ')
+        sf('bold', 8); stc(fg)
+        tx(level, cx + dayW / 2, y + 9, { align: 'center' })
+
+        const triggers = Object.keys(wd.risks)
+        if (triggers.length) {
           sf('normal', 5.5); stc(fg)
-          const tlines = doc.splitTextToSize(trigStr, dayW - 3)
+          const tlines = doc.splitTextToSize(triggers.join(', '), dayW - 3)
           tx(tlines.slice(0, 3), cx + dayW / 2, y + 15, { align: 'center' })
         }
       })
       y += rowH
     }
 
-    // ── Draw all rows ──────────────────────────────────────────────────────
-    const notes = log.lookAheadNotes
-    nilRow('Risks', notes?.risks ?? 'Nil')
+    textRow('Risks', notes.risks)
     weatherRow('Weather\nEast Midlands', emDays)
     weatherRow('Weather\nLondon North', lnDays)
-    nilRow('TOC Operations\n& Depot start up', notes?.toc ?? 'Nil', 14)
-    nilRow('FOC Operations', notes?.foc ?? 'Nil')
+    textRow('TOC Operations\n& Depot start up', notes.toc, 14)
+    textRow('FOC Operations', notes.foc)
 
     y += 6
   }
@@ -317,11 +311,7 @@ export async function generatePDF(log: LogState): Promise<void> {
 
   y = drawCoverHeader()
 
-  // ── 0. 5 Day Look Ahead ───────────────────────────────────────────────────
-  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
-  drawFiveDayLookAhead()
-
-  // ── 1. Roster ─────────────────────────────────────────────────────────────
+  // ── 0. Roster ─────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)
   const rosterStartY = y
   const dayEnd   = drawRosterHalf(log.roster.dayShift,   'DAY SHIFT',   0)
@@ -329,7 +319,12 @@ export async function generatePDF(log: LogState): Promise<void> {
   const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
 
-  // ── 2. Safety infographic ─────────────────────────────────────────────────
+  // ── 1. 5 Day Look Ahead (page 2) ──────────────────────────────────────────
+  newPage()
+  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
+  drawFiveDayLookAhead()
+
+  // ── 2. Safety infographic (page 3+) ───────────────────────────────────────
   newPage()
   sectionHead('SAFETY & INCIDENT SUMMARY', `${log.incidents.length} incidents · ${log.incidents.filter(i => i.isHighlight).length} highlighted`)
   drawSafetyStats(log.incidents)
