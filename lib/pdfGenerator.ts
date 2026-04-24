@@ -319,11 +319,12 @@ export async function generatePDF(log: LogState): Promise<void> {
   const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
 
-  // ── 1. 5 Day Look Ahead ───────────────────────────────────────────────────
+  // ── 1. 5 Day Look Ahead (page 2) ──────────────────────────────────────────
+  newPage()
   sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
   drawFiveDayLookAhead()
 
-  // ── 2. Safety infographic ─────────────────────────────────────────────────
+  // ── 2. Safety infographic (page 3+) ───────────────────────────────────────
   newPage()
   sectionHead('SAFETY & INCIDENT SUMMARY', `${log.incidents.length} incidents · ${log.incidents.filter(i => i.isHighlight).length} highlighted`)
   drawSafetyStats(log.incidents)
