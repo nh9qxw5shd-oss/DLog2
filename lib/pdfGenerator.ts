@@ -1,6 +1,7 @@
 'use client'
 
-import { LogState, Incident, CATEGORY_CONFIG, ShiftSlot } from './types'
+import { LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather } from './types'
+import { deriveDaysFromDate } from './weatherParser'
 
 type RGB = [number, number, number]
 
@@ -19,6 +20,20 @@ const C: Record<string, RGB> = {
   darkGray: [ 44,  62,  80],
   black:    [ 22,  28,  36],
   pageBg:   [248, 249, 252],
+}
+
+const HAZARD_BG: Record<HazardLevel, RGB> = {
+  GREEN:   [ 39, 174,  96],
+  AWARE:   [241, 196,  15],
+  ADVERSE: [230, 126,  34],
+  EXTREME: [192,  57,  43],
+}
+// Text colour on each hazard background
+const HAZARD_FG: Record<HazardLevel, RGB> = {
+  GREEN:   [  0,  31,  69],
+  AWARE:   [  0,  31,  69],
+  ADVERSE: [  0,  31,  69],
+  EXTREME: [255, 255, 255],
 }
 
 const SEV_COLOR: Record<string, RGB> = {
@@ -114,6 +129,121 @@ export async function generatePDF(log: LogState): Promise<void> {
     y += 14
   }
 
+  // ── 5 Day Look Ahead table ────────────────────────────────────────────────
+
+  const drawFiveDayLookAhead = () => {
+    const fw      = log.fiveDayWeather
+    const tableW  = W - M * 2
+    const labelW  = 50
+    const dayW    = (tableW - labelW) / 5
+
+    // Resolve day column names: from parsed weather or derived from log date
+    const days: string[] = fw?.eastMidlands.length
+      ? fw.eastMidlands.map(d => d.day)
+      : deriveDaysFromDate(log.date)
+
+    // Pad both route arrays to exactly 5 entries
+    const pad = (arr: DayWeather[], keys: string[]): DayWeather[] =>
+      keys.map((day, i) => arr[i] ?? { day, level: 'GREEN', triggers: [] })
+
+    const emDays = pad(fw?.eastMidlands ?? [], days)
+    const lnDays = pad(fw?.londonNorth  ?? [], days)
+
+    // ── Helper: draw one table cell ──
+    const cell = (
+      cx: number, cy: number, w: number, h: number,
+      bg: RGB, border: RGB = C.lightGray
+    ) => {
+      sfc(bg); rc(cx, cy, w, h)
+      sdc(border); doc.setLineWidth(0.2); rc(cx, cy, w, h, 'S')
+    }
+
+    // ── Row 1: header ───────────────────────────────────────────────────────
+    const HDR_H = 20
+    cell(M, y, labelW, HDR_H, [210, 215, 222])
+    sf('bold', 6.5); stc(C.navy)
+    tx('East Midlands Route', M + 3, y + 7)
+    tx('5 Day Look Ahead', M + 3, y + 13)
+
+    days.forEach((day, i) => {
+      const cx = M + labelW + i * dayW
+      cell(cx, y, dayW, HDR_H, [225, 230, 237])
+      sf('bold', 8); stc(C.navy)
+      // Abbrev if needed to fit
+      const label = day.length > 9 ? day.slice(0, 3) : day
+      tx(label, cx + dayW / 2, y + 13, { align: 'center' })
+    })
+    y += HDR_H
+
+    // ── Generic Nil/text row helper ──────────────────────────────────────────
+    const nilRow = (label: string, value: string, rowH = 12, labelBg: RGB = [232, 236, 241]) => {
+      cell(M, y, labelW, rowH, labelBg)
+      const llines = doc.splitTextToSize(label, labelW - 6)
+      sf('bold', 7); stc(C.navy)
+      tx(llines.slice(0, 2), M + 3, y + (rowH > 14 ? 7 : 4.5) + 1.5)
+
+      for (let i = 0; i < 5; i++) {
+        const cx = M + labelW + i * dayW
+        cell(cx, y, dayW, rowH, C.offWhite)
+        sf('bold', 8); stc(C.darkGray)
+        tx(value, cx + dayW / 2, y + rowH / 2 + 2.5, { align: 'center' })
+      }
+      y += rowH
+    }
+
+    // ── AMBER row helper (Steam Fire Risk) ────────────────────────────────────
+    const amberRow = (label: string, rowH = 12) => {
+      cell(M, y, labelW, rowH, [232, 236, 241])
+      const llines = doc.splitTextToSize(label, labelW - 6)
+      sf('bold', 7); stc(C.navy); tx(llines.slice(0, 2), M + 3, y + 4.5)
+
+      for (let i = 0; i < 5; i++) {
+        const cx = M + labelW + i * dayW
+        cell(cx, y, dayW, rowH, [243, 156, 18])
+        sf('bold', 8); stc(C.navy)
+        tx('AMBER', cx + dayW / 2, y + rowH / 2 + 2.5, { align: 'center' })
+      }
+      y += rowH
+    }
+
+    // ── Weather row helper ────────────────────────────────────────────────────
+    const weatherRow = (label: string, weatherDays: DayWeather[], rowH = 26) => {
+      cell(M, y, labelW, rowH, [232, 236, 241])
+      const llines = doc.splitTextToSize(label, labelW - 6)
+      sf('bold', 7); stc(C.navy); tx(llines.slice(0, 3), M + 3, y + 6)
+
+      weatherDays.forEach((wd, i) => {
+        const cx    = M + labelW + i * dayW
+        const bg    = HAZARD_BG[wd.level]
+        const fg    = HAZARD_FG[wd.level]
+        cell(cx, y, dayW, rowH, bg)
+
+        // Level label
+        sf('bold', 8); stc(fg)
+        tx(wd.level, cx + dayW / 2, y + 9, { align: 'center' })
+
+        // Triggers (wrapped, smaller font)
+        if (wd.triggers.length) {
+          const trigStr = wd.triggers.join(', ')
+          sf('normal', 5.5); stc(fg)
+          const tlines = doc.splitTextToSize(trigStr, dayW - 3)
+          tx(tlines.slice(0, 3), cx + dayW / 2, y + 15, { align: 'center' })
+        }
+      })
+      y += rowH
+    }
+
+    // ── Draw all rows ──────────────────────────────────────────────────────
+    nilRow('Risks', 'Nil')
+    weatherRow('Weather\nEast Midlands', emDays)
+    weatherRow('Weather\nLondon North', lnDays)
+    nilRow('TOC Operations\n& Depot start up', 'Nil', 14)
+    nilRow('FOC Operations', 'Nil')
+    amberRow('Steam Fire Risk')
+
+    y += 6
+  }
+
   // ── Roster grid ───────────────────────────────────────────────────────────
 
   const drawRosterHalf = (slots: ShiftSlot[], label: string, xOff: number): number => {
@@ -201,6 +331,10 @@ export async function generatePDF(log: LogState): Promise<void> {
   // ─────────────────────────────────────────────────────────────────────────
 
   y = drawCoverHeader()
+
+  // ── 0. 5 Day Look Ahead ───────────────────────────────────────────────────
+  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
+  drawFiveDayLookAhead()
 
   // ── 1. Roster ─────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)

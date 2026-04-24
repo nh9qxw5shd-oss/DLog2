@@ -12,6 +12,8 @@ import {
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
+import { parseWeatherPDF, deriveDaysFromDate } from '@/lib/weatherParser'
+import type { FiveDayWeather, HazardLevel } from '@/lib/types'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -210,13 +212,156 @@ function UploadStep({ onComplete }: {
   )
 }
 
+// ─── Hazard level helpers ─────────────────────────────────────────────────────
+
+const HAZARD_BG: Record<HazardLevel, string> = {
+  GREEN:   'bg-[#27AE60]',
+  AWARE:   'bg-[#F1C40F]',
+  ADVERSE: 'bg-[#E67E22]',
+  EXTREME: 'bg-[#C0392B]',
+}
+const HAZARD_TEXT: Record<HazardLevel, string> = {
+  GREEN:   'text-white',
+  AWARE:   'text-[#001F45]',
+  ADVERSE: 'text-[#001F45]',
+  EXTREME: 'text-white',
+}
+
+function HazardBadge({ level, triggers }: { level: HazardLevel; triggers: string[] }) {
+  return (
+    <div className={`${HAZARD_BG[level]} ${HAZARD_TEXT[level]} rounded px-1 py-0.5 text-center leading-tight`}>
+      <div className="text-xs font-bold">{level}</div>
+      {triggers.length > 0 && (
+        <div className="text-[9px] font-normal opacity-90 mt-0.5">{triggers.join(', ')}</div>
+      )}
+    </div>
+  )
+}
+
+// ─── Weather PDF upload sub-component ────────────────────────────────────────
+
+function WeatherUpload({ weather, onParsed }: {
+  weather?: FiveDayWeather
+  onParsed: (w: FiveDayWeather | undefined) => void
+}) {
+  const [parsing, setParsing] = useState(false)
+  const [error,   setError]   = useState('')
+  const [fileName, setFileName] = useState(weather ? 'Loaded' : '')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleFile = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Please upload a PDF file (Network Rail 5 day forecast)')
+      return
+    }
+    setError(''); setParsing(true); setFileName(file.name)
+    try {
+      const result = await parseWeatherPDF(file)
+      if (!result.eastMidlands.length && !result.londonNorth.length) {
+        setError('Could not find East Midlands or London North hazard tables in this PDF. Check the file is the Network Rail LNE & EM 5 day forecast.')
+        setParsing(false)
+        return
+      }
+      onParsed(result)
+    } catch (e: any) {
+      setError(e.message || 'Failed to parse weather PDF')
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const days = weather
+    ? [...weather.eastMidlands, ...weather.londonNorth]
+        .map(d => d.day)
+        .filter((d, i, a) => a.indexOf(d) === i)
+    : []
+
+  return (
+    <div className="card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead — Weather Forecast</p>
+          <p className="text-xs text-[#4A5A72] mt-0.5">Upload the Network Rail LNE &amp; EM 5 day forecast PDF (optional)</p>
+        </div>
+        {weather && (
+          <button onClick={() => { onParsed(undefined); setFileName('') }}
+            className="text-xs text-[#4A5A72] hover:text-red-400 transition-colors flex items-center gap-1">
+            <X size={11} /> Clear
+          </button>
+        )}
+      </div>
+
+      {!weather ? (
+        <div
+          className="border border-dashed border-[rgba(74,111,165,0.4)] rounded p-4 text-center cursor-pointer hover:border-[#4A6FA5] transition-colors"
+          onClick={() => inputRef.current?.click()}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
+        >
+          <input ref={inputRef} type="file" accept=".pdf" className="hidden"
+            onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+          {parsing ? (
+            <div className="flex items-center justify-center gap-2 text-[#7A8BA8] text-xs">
+              <Loader2 size={14} className="animate-spin" /> Parsing weather data…
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <FileText size={20} className="mx-auto text-[#4A6FA5]" />
+              <p className="text-[#7A8BA8] text-xs">{fileName || 'Drop forecast PDF or click to browse'}</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Preview table */
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr>
+                <th className="text-left px-2 py-1 text-[#7A8BA8] font-medium w-28"></th>
+                {days.map(d => (
+                  <th key={d} className="text-center px-1 py-1 text-[#7A8BA8] font-medium text-[10px]">{d.slice(0, 3)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: 'East Midlands', data: weather.eastMidlands },
+                { label: 'London North',  data: weather.londonNorth  },
+              ].map(row => (
+                <tr key={row.label}>
+                  <td className="px-2 py-1 text-[#7A8BA8] font-medium whitespace-nowrap">{row.label}</td>
+                  {row.data.map((d, i) => (
+                    <td key={i} className="px-1 py-1">
+                      <HazardBadge level={d.level} triggers={d.triggers} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {weather.issuedBy && (
+            <p className="text-[#4A5A72] text-[10px] font-mono mt-2 truncate">Issued: {weather.issuedBy}</p>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 p-3 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)]">
+          <AlertCircle size={13} className="text-red-400 mt-0.5 shrink-0" />
+          <p className="text-red-400 text-xs">{error}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Step 2: Roster ───────────────────────────────────────────────────────────
 
 function RosterStep({ log, onChange, onNext, onBack }: {
-  log: LogState
+  log:      LogState
   onChange: (updates: Partial<LogState>) => void
-  onNext: () => void
-  onBack: () => void
+  onNext:   () => void
+  onBack:   () => void
 }) {
   const updateSlot = (shift: 'dayShift' | 'nightShift', idx: number, field: keyof ShiftSlot, value: string) => {
     const r = { ...log.roster }
@@ -307,6 +452,11 @@ function RosterStep({ log, onChange, onNext, onBack }: {
             className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none" />
         </div>
       </div>
+
+      <WeatherUpload
+        weather={log.fiveDayWeather}
+        onParsed={w => onChange({ fiveDayWeather: w })}
+      />
 
       {renderShiftTable('dayShift', '◑  Day Shift')}
       {renderShiftTable('nightShift', '◐  Night Shift')}
@@ -687,6 +837,8 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Incident summary infographics</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
+          {log.fiveDayWeather && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (weather parsed)</div>}
+          {!log.fiveDayWeather && <div className="flex items-center gap-2"><AlertCircle size={11} className="text-[#4A5A72]" /> 5 Day Look Ahead (no weather PDF — placeholder)</div>}
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
         </div>
       </div>

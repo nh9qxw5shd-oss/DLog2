@@ -1,3 +1,19 @@
+// ─── Weather / 5 Day Look Ahead ───────────────────────────────────────────────
+
+export type HazardLevel = 'GREEN' | 'AWARE' | 'ADVERSE' | 'EXTREME'
+
+export interface DayWeather {
+  day: string        // 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Monday'
+  level: HazardLevel
+  triggers: string[] // e.g. ['Temp Range', 'Frost']
+}
+
+export interface FiveDayWeather {
+  eastMidlands: DayWeather[]
+  londonNorth: DayWeather[]
+  issuedBy?: string
+}
+
 // ─── Incident Types ───────────────────────────────────────────────────────────
 
 export type IncidentCategory =
@@ -80,6 +96,7 @@ export interface LogState {
   roster: RosterData
   incidents: Incident[]
   rawLogText?: string        // verbatim CCIL text for appendix
+  fiveDayWeather?: FiveDayWeather
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 
