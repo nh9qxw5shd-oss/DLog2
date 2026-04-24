@@ -12,6 +12,8 @@ import {
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
+import { parseWeatherPDF, deriveDaysFromDate } from '@/lib/weatherParser'
+import type { FiveDayWeather, HazardLevel, WeatherParseDebug } from '@/lib/types'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -55,6 +57,7 @@ const BLANK_LOG: LogState = {
   controlCentre: 'East Midlands Control Centre (EMCC)',
   roster: DEFAULT_ROSTER,
   incidents: [],
+  lookAheadNotes: { risks: 'Nil', toc: 'Nil', foc: 'Nil' },
   status: 'empty',
 }
 
@@ -210,13 +213,242 @@ function UploadStep({ onComplete }: {
   )
 }
 
+// ─── Hazard level helpers ─────────────────────────────────────────────────────
+
+const HAZARD_BG: Record<HazardLevel, string> = {
+  GREEN:   'bg-[#27AE60]',
+  AWARE:   'bg-[#F1C40F]',
+  ADVERSE: 'bg-[#E67E22]',
+  EXTREME: 'bg-[#C0392B]',
+}
+const HAZARD_TEXT: Record<HazardLevel, string> = {
+  GREEN:   'text-white',
+  AWARE:   'text-[#001F45]',
+  ADVERSE: 'text-[#001F45]',
+  EXTREME: 'text-white',
+}
+
+function HazardBadge({ level, triggers }: { level: HazardLevel; triggers: string[] }) {
+  return (
+    <div className={`${HAZARD_BG[level]} ${HAZARD_TEXT[level]} rounded px-1 py-0.5 text-center leading-tight`}>
+      <div className="text-xs font-bold">{level}</div>
+      {triggers.length > 0 && (
+        <div className="text-[9px] font-normal opacity-90 mt-0.5">{triggers.join(', ')}</div>
+      )}
+    </div>
+  )
+}
+
+// ─── Parser debug viewer (for diagnosing weather PDF parse issues) ───────────
+
+function ParserDebugView({ debug }: { debug: WeatherParseDebug }) {
+  return (
+    <details className="mt-2 border border-[rgba(74,111,165,0.2)] rounded p-2 bg-[#0A0F1E]">
+      <summary className="text-[10px] text-[#7A8BA8] font-mono cursor-pointer hover:text-white">
+        Parser diagnostics — click to expand
+      </summary>
+      <div className="mt-2 space-y-3 text-[10px] font-mono text-[#7A8BA8] max-h-96 overflow-y-auto">
+        <div>
+          <div className="text-[#4A6FA5] font-semibold mb-1">Overview</div>
+          <div>items: {debug.totalItems} · rows: {debug.totalRows}</div>
+          <div>EM section at row: {debug.emSectionRowIdx} · LN section at row: {debug.lnSectionRowIdx}</div>
+        </div>
+
+        {(['emSection', 'lnSection'] as const).map(key => {
+          const sec = debug[key]
+          if (!sec) return null
+          const label = key === 'emSection' ? 'East Midlands' : 'London North'
+          return (
+            <div key={key} className="border-t border-[rgba(74,111,165,0.15)] pt-2">
+              <div className="text-[#4A6FA5] font-semibold mb-1">{label}</div>
+              <div className="mb-1">col-header row: {sec.colHeaderRowIdx} · cols: {sec.colHeaders.length}</div>
+              <div className="mb-2 text-[9px]">
+                {sec.colHeaders.map((c, i) => (
+                  <span key={i} className="mr-2">{c.label}@x={c.x}</span>
+                ))}
+              </div>
+              {sec.dayRows.length === 0 && <div className="text-red-400">No day rows detected!</div>}
+              {sec.dayRows.map((dr, i) => (
+                <div key={i} className="mb-1.5 pb-1.5 border-b border-[rgba(74,111,165,0.1)]">
+                  <div>
+                    <span className="text-[#E05206]">{dr.day}</span> (row {dr.rowIdx})
+                  </div>
+                  <div className="text-[9px] text-[#4A5A72] break-all">
+                    items: {dr.items.map(it => `[${it.x}:${it.str}]`).join(' ')}
+                  </div>
+                  {dr.alerts.length > 0 && (
+                    <div className="text-[9px] text-[#27AE60]">
+                      alerts: {dr.alerts.map(a => `${a.str}@x=${a.x}→${a.mappedTo || '(none)'}`).join(', ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        })}
+
+        <div className="border-t border-[rgba(74,111,165,0.15)] pt-2">
+          <div className="text-[#4A6FA5] font-semibold mb-1">First 40 rows (as text)</div>
+          {debug.sampleRows.map((r, i) => (
+            <div key={i} className="text-[9px] break-all text-[#4A5A72]">{r}</div>
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
+// ─── 5 Day Look Ahead config component ───────────────────────────────────────
+
+function FiveDaySection({ log, onChange }: {
+  log:      LogState
+  onChange: (updates: Partial<LogState>) => void
+}) {
+  const [parsing,  setParsing]  = useState(false)
+  const [error,    setError]    = useState('')
+  const [fileName, setFileName] = useState(log.fiveDayWeather ? 'Loaded' : '')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const weather = log.fiveDayWeather
+  const notes   = log.lookAheadNotes
+
+  const updateNote = (key: keyof typeof notes, val: string) =>
+    onChange({ lookAheadNotes: { ...notes, [key]: val } })
+
+  const handleFile = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Please upload a PDF file (Network Rail 5 day forecast)')
+      return
+    }
+    setError(''); setParsing(true); setFileName(file.name)
+    try {
+      const result = await parseWeatherPDF(file)
+      if (!result.eastMidlands.length && !result.londonNorth.length) {
+        setError('No East Midlands or London North hazard tables found. Ensure this is the Network Rail LNE & EM 5 day forecast PDF.')
+        setParsing(false)
+        return
+      }
+      onChange({ fiveDayWeather: result })
+    } catch (e: any) {
+      setError(e.message || 'Failed to parse weather PDF')
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const days = weather?.eastMidlands.map(d => d.day) ?? []
+
+  return (
+    <div className="card p-4 space-y-4">
+      <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead</p>
+
+      {/* ── Weather PDF upload ── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-[#4A5A72]">Weather forecast PDF (NR LNE &amp; EM 5 day)</p>
+          {weather && (
+            <button
+              onClick={() => { onChange({ fiveDayWeather: undefined }); setFileName('') }}
+              className="text-xs text-[#4A5A72] hover:text-red-400 transition-colors flex items-center gap-1">
+              <X size={11} /> Clear
+            </button>
+          )}
+        </div>
+
+        {!weather ? (
+          <div
+            className="border border-dashed border-[rgba(74,111,165,0.4)] rounded p-3 text-center cursor-pointer hover:border-[#4A6FA5] transition-colors"
+            onClick={() => inputRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
+          >
+            <input ref={inputRef} type="file" accept=".pdf" className="hidden"
+              onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+            {parsing ? (
+              <div className="flex items-center justify-center gap-2 text-[#7A8BA8] text-xs">
+                <Loader2 size={14} className="animate-spin" /> Parsing weather tables…
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2">
+                <FileText size={16} className="text-[#4A6FA5]" />
+                <p className="text-[#7A8BA8] text-xs">{fileName || 'Drop forecast PDF or click to browse'}</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr>
+                  <th className="text-left px-2 py-1 text-[#7A8BA8] font-medium w-28" />
+                  {days.map(d => (
+                    <th key={d} className="text-center px-1 py-1 text-[#7A8BA8] font-medium text-[10px]">{d.slice(0, 3)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  { label: 'East Midlands', data: weather.eastMidlands },
+                  { label: 'London North',  data: weather.londonNorth  },
+                ] as const).map(row => (
+                  <tr key={row.label}>
+                    <td className="px-2 py-1 text-[#7A8BA8] font-medium whitespace-nowrap text-[11px]">{row.label}</td>
+                    {row.data.map((d, i) => (
+                      <td key={i} className="px-1 py-1">
+                        <HazardBadge level={d.level} triggers={d.triggers} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {weather.issuedBy && (
+              <p className="text-[#4A5A72] text-[10px] font-mono mt-1.5 truncate">Issued: {weather.issuedBy}</p>
+            )}
+            {weather.debug && <ParserDebugView debug={weather.debug} />}
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 p-2 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)]">
+            <AlertCircle size={12} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-red-400 text-xs">{error}</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Editable rows ── */}
+      <div className="space-y-2">
+        <p className="text-xs text-[#4A5A72]">Other rows (applied across all 5 days)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {([
+            { key: 'risks' as const, label: 'Risks' },
+            { key: 'toc'   as const, label: 'TOC Operations & Depot' },
+            { key: 'foc'   as const, label: 'FOC Operations' },
+          ]).map(({ key, label }) => (
+            <div key={key}>
+              <label className="block text-[10px] text-[#7A8BA8] mb-1 font-medium uppercase tracking-wider">{label}</label>
+              <input
+                type="text"
+                value={notes[key]}
+                onChange={e => updateNote(key, e.target.value)}
+                className="w-full bg-[#0A0F1E] text-white text-xs px-2 py-1.5 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Step 2: Roster ───────────────────────────────────────────────────────────
 
 function RosterStep({ log, onChange, onNext, onBack }: {
-  log: LogState
+  log:      LogState
   onChange: (updates: Partial<LogState>) => void
-  onNext: () => void
-  onBack: () => void
+  onNext:   () => void
+  onBack:   () => void
 }) {
   const updateSlot = (shift: 'dayShift' | 'nightShift', idx: number, field: keyof ShiftSlot, value: string) => {
     const r = { ...log.roster }
@@ -307,6 +539,8 @@ function RosterStep({ log, onChange, onNext, onBack }: {
             className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none" />
         </div>
       </div>
+
+      <FiveDaySection log={log} onChange={onChange} />
 
       {renderShiftTable('dayShift', '◑  Day Shift')}
       {renderShiftTable('nightShift', '◐  Night Shift')}
@@ -687,6 +921,8 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Incident summary infographics</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
+          {log.fiveDayWeather && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (weather parsed)</div>}
+          {!log.fiveDayWeather && <div className="flex items-center gap-2"><AlertCircle size={11} className="text-[#4A5A72]" /> 5 Day Look Ahead (no weather PDF — placeholder)</div>}
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
         </div>
       </div>
