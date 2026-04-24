@@ -13,19 +13,19 @@ const DAY_MAP: Record<string, string> = {
   sun: 'Sunday',   mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday',
 }
 
-// Canonical column names as they appear in the Summary Hazards table headers.
-// Matching uses the first distinctive word of each name.
+// First distinctive word of each column label; used to match header text items.
+// Order matters only for collision-avoidance — no two keys share the same prefix.
 const COLUMN_LABELS: Array<{ key: string; label: string }> = [
-  { key: 'wind',       label: 'Wind'               },
-  { key: 'heavy',      label: 'Heavy Rain'          },
-  { key: 'convective', label: 'Conv. Rainfall'      },
-  { key: 'lightning',  label: 'Lightning'           },
-  { key: 'snow',       label: 'Snow'                },
-  { key: 'frost',      label: 'Frost'               },
-  { key: 'max',        label: 'Max Temp'            },
-  { key: 'min',        label: 'Min Temp'            },
-  { key: 'temp',       label: 'Temp Range'          },
-  { key: 'ice',        label: 'Ice Day'             },
+  { key: 'wind',       label: 'Wind'          },
+  { key: 'heavy',      label: 'Heavy Rain'    },
+  { key: 'convective', label: 'Conv. Rainfall' },
+  { key: 'lightning',  label: 'Lightning'     },
+  { key: 'snow',       label: 'Snow'          },
+  { key: 'frost',      label: 'Frost'         },
+  { key: 'max',        label: 'Max Temp'      },
+  { key: 'min',        label: 'Min Temp'      },
+  { key: 'temp',       label: 'Temp Range'    },
+  { key: 'ice',        label: 'Ice Day'       },
 ]
 
 // ─── Internal text item type ──────────────────────────────────────────────────
@@ -41,7 +41,6 @@ interface TItem {
 async function extractItems(file: File): Promise<TItem[]> {
   const pdfjsLib = await import('pdfjs-dist')
 
-  // Use CDN worker to avoid bundling the large worker script
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
 
@@ -60,7 +59,7 @@ async function extractItems(file: File): Promise<TItem[]> {
       all.push({
         str: item.str.trim(),
         x:   Math.round(tx),
-        y:   Math.round(viewport.height - ty), // flip to top-down
+        y:   Math.round(viewport.height - ty),
       })
     }
   }
@@ -76,8 +75,7 @@ function groupRows(items: TItem[], tol = 4): TItem[][] {
   let cur: TItem[] = [sorted[0]]
 
   for (let i = 1; i < sorted.length; i++) {
-    const prev = cur[cur.length - 1]
-    if (Math.abs(sorted[i].y - prev.y) <= tol) {
+    if (Math.abs(sorted[i].y - cur[cur.length - 1].y) <= tol) {
       cur.push(sorted[i])
     } else {
       rows.push(cur)
@@ -91,72 +89,70 @@ function groupRows(items: TItem[], tol = 4): TItem[][] {
 const rtext = (row: TItem[]) => row.map(i => i.str).join(' ')
 
 // ─── Table section parser ─────────────────────────────────────────────────────
+//
+// Strategy: find the column-name header row by looking for "Wind" text, then
+// map each alert keyword (Aware/Adverse/Extreme) to its column label using
+// x-distance from the column header items.  This avoids index-based pairing
+// which breaks when Max Temp / Min Temp appear in the sub-header row instead
+// of the main column header row.
 
 function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
+  const DAY_RE = /^(mon|tue|wed|thu|fri|sat|sun)/i
   const results: DayWeather[] = []
-  const DAY_START_RE = /^(mon|tue|wed|thu|fri|sat|sun)/i
 
-  // ── Step 1: find the "Hazard / Conf" sub-header row inside this section.
-  //    It has at least 5 occurrences of the word "Hazard" (one per column).
-  let hazardRow: TItem[] = []
-  let hazardRowIdx = -1
+  // ── Step 1: find the column name header row (first row containing "Wind")
+  let colNameItems: Array<{ x: number; label: string }> = []
 
   for (let i = startIdx; i < Math.min(startIdx + 12, allRows.length); i++) {
-    const hCount = allRows[i].filter(it => /^hazard$/i.test(it.str)).length
-    if (hCount >= 5) { hazardRow = allRows[i]; hazardRowIdx = i; break }
-  }
+    const rowStr = rtext(allRows[i])
+    if (!/wind/i.test(rowStr)) continue
 
-  // ── Step 2: build a mapping from hazard x-position → column label.
-  //    The column-name header row is the first row in [startIdx, hazardRowIdx)
-  //    that contains "Wind" (the leftmost column name).
-  const colXmap: Array<{ x: number; label: string }> = []
-
-  if (hazardRowIdx > startIdx) {
-    let colNameRow: TItem[] = []
-    for (let i = startIdx; i < hazardRowIdx; i++) {
-      if (/wind/i.test(rtext(allRows[i]))) { colNameRow = allRows[i]; break }
+    // Extract column-label items from this row by matching the first
+    // distinctive key of each COLUMN_LABELS entry.
+    const candidates: Array<{ x: number; label: string }> = []
+    for (const item of allRows[i]) {
+      const lower = item.str.toLowerCase()
+      const col = COLUMN_LABELS.find(c => lower.startsWith(c.key))
+      if (col && !candidates.find(m => m.label === col.label)) {
+        candidates.push({ x: item.x, label: col.label })
+      }
     }
 
-    if (colNameRow.length) {
-      // Sort column name items by x; match each to a COLUMN_LABELS entry
-      const nameItems = [...colNameRow].sort((a, b) => a.x - b.x)
-      const matched: Array<{ x: number; label: string }> = []
-
-      for (const item of nameItems) {
+    // Also scan the sub-header row immediately below (contains
+    // "Max Temp (06-18)" and "Min Temp (18-06)" which are NOT in the
+    // column header row) — look within the next 4 rows.
+    for (let j = i + 1; j < Math.min(i + 5, allRows.length); j++) {
+      for (const item of allRows[j]) {
         const lower = item.str.toLowerCase()
         const col = COLUMN_LABELS.find(c => lower.startsWith(c.key))
-        if (col && !matched.find(m => m.label === col.label)) {
-          matched.push({ x: item.x, label: col.label })
+        if (col && !candidates.find(m => m.label === col.label)) {
+          candidates.push({ x: item.x, label: col.label })
         }
       }
+    }
 
-      // The hazard sub-columns appear in the same left-to-right order.
-      // Pair each matched column name with its corresponding "Hazard" x.
-      const hazardXs = hazardRow
-        .filter(it => /^hazard$/i.test(it.str))
-        .map(it => it.x)
-        .sort((a, b) => a - b)
-
-      matched.sort((a, b) => a.x - b.x).forEach((col, idx) => {
-        if (idx < hazardXs.length) {
-          colXmap.push({ x: hazardXs[idx], label: col.label })
-        }
-      })
+    if (candidates.length >= 3) {
+      colNameItems = candidates
+      break
     }
   }
 
-  // ── Step 3: parse each day row.
+  // ── Step 2: parse each day row
   for (let i = startIdx; i < allRows.length && results.length < 5; i++) {
-    const row   = allRows[i]
-    const first = row[0]?.str ?? ''
-    if (!DAY_START_RE.test(first)) continue
+    const row = allRows[i]
+    if (!row.length) continue
 
-    const dayKey = first.slice(0, 3).toLowerCase()
+    // The day name is the leftmost text item in the row.
+    const sorted  = [...row].sort((a, b) => a.x - b.x)
+    const first   = sorted[0]?.str ?? ''
+    if (!DAY_RE.test(first)) continue
+
+    const dayKey  = first.slice(0, 3).toLowerCase()
     const dayFull = DAY_MAP[dayKey] ?? first
 
     const alerts = row.filter(it => ALERT_RE.test(it.str))
 
-    if (alerts.length === 0) {
+    if (!alerts.length) {
       results.push({ day: dayFull, level: 'GREEN', triggers: [] })
       continue
     }
@@ -168,11 +164,11 @@ function parseSection(allRows: TItem[][], startIdx: number): DayWeather[] {
       const lvl = alert.str.toUpperCase() as HazardLevel
       if (HAZARD_RANK[lvl] > HAZARD_RANK[topLevel]) topLevel = lvl
 
-      if (colXmap.length) {
-        // Find the column whose hazard x-position is nearest this alert's x.
-        let nearest = colXmap[0]
+      // Map to nearest column label by x-distance.
+      if (colNameItems.length) {
+        let nearest = colNameItems[0]
         let minDist = Math.abs(alert.x - nearest.x)
-        for (const col of colXmap) {
+        for (const col of colNameItems) {
           const d = Math.abs(alert.x - col.x)
           if (d < minDist) { minDist = d; nearest = col }
         }
@@ -192,25 +188,27 @@ export async function parseWeatherPDF(file: File): Promise<FiveDayWeather> {
   const items = await extractItems(file)
   const rows  = groupRows(items)
 
-  // Locate the two relevant summary table headers (case-insensitive).
-  const emIdx = rows.findIndex(r =>
-    /east\s+midlands/i.test(rtext(r)) && /lne|em/i.test(rtext(r))
-  )
-  const lnIdx = rows.findIndex(r =>
-    /london\s+north/i.test(rtext(r)) && /lne|em/i.test(rtext(r))
-  )
+  // Require "Summary Hazards" AND the route name — avoids matching earlier
+  // overview tables that may also mention "East Midlands".
+  const emIdx = rows.findIndex(r => {
+    const t = rtext(r)
+    return /summary\s+hazards/i.test(t) && /east\s+midlands/i.test(t)
+  })
+  const lnIdx = rows.findIndex(r => {
+    const t = rtext(r)
+    return /summary\s+hazards/i.test(t) && /london\s+north/i.test(t)
+  })
 
   const eastMidlands = emIdx >= 0 ? parseSection(rows, emIdx + 1) : []
   const londonNorth  = lnIdx >= 0 ? parseSection(rows, lnIdx + 1) : []
 
-  // Pull the "Issued on … by …" footer line if present.
   const issuedRow = rows.find(r => /issued\s+on/i.test(rtext(r)))
   const issuedBy  = issuedRow ? rtext(issuedRow).replace(/^.*?issued\s+on\s+/i, '') : undefined
 
   return { eastMidlands, londonNorth, issuedBy }
 }
 
-// ─── Derive day names from a log date when no PDF is available ────────────────
+// ─── Derive day names from a log date when no PDF is uploaded ─────────────────
 
 export function deriveDaysFromDate(isoDate: string): string[] {
   const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']

@@ -97,6 +97,11 @@ export interface LogState {
   incidents: Incident[]
   rawLogText?: string        // verbatim CCIL text for appendix
   fiveDayWeather?: FiveDayWeather
+  lookAheadNotes: {
+    risks: string            // default 'Nil'
+    toc:   string            // default 'Nil'
+    foc:   string            // default 'Nil'
+  }
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 

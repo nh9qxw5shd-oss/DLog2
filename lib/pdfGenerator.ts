@@ -191,21 +191,6 @@ export async function generatePDF(log: LogState): Promise<void> {
       y += rowH
     }
 
-    // ── AMBER row helper (Steam Fire Risk) ────────────────────────────────────
-    const amberRow = (label: string, rowH = 12) => {
-      cell(M, y, labelW, rowH, [232, 236, 241])
-      const llines = doc.splitTextToSize(label, labelW - 6)
-      sf('bold', 7); stc(C.navy); tx(llines.slice(0, 2), M + 3, y + 4.5)
-
-      for (let i = 0; i < 5; i++) {
-        const cx = M + labelW + i * dayW
-        cell(cx, y, dayW, rowH, [243, 156, 18])
-        sf('bold', 8); stc(C.navy)
-        tx('AMBER', cx + dayW / 2, y + rowH / 2 + 2.5, { align: 'center' })
-      }
-      y += rowH
-    }
-
     // ── Weather row helper ────────────────────────────────────────────────────
     const weatherRow = (label: string, weatherDays: DayWeather[], rowH = 26) => {
       cell(M, y, labelW, rowH, [232, 236, 241])
@@ -234,12 +219,12 @@ export async function generatePDF(log: LogState): Promise<void> {
     }
 
     // ── Draw all rows ──────────────────────────────────────────────────────
-    nilRow('Risks', 'Nil')
+    const notes = log.lookAheadNotes
+    nilRow('Risks', notes?.risks ?? 'Nil')
     weatherRow('Weather\nEast Midlands', emDays)
     weatherRow('Weather\nLondon North', lnDays)
-    nilRow('TOC Operations\n& Depot start up', 'Nil', 14)
-    nilRow('FOC Operations', 'Nil')
-    amberRow('Steam Fire Risk')
+    nilRow('TOC Operations\n& Depot start up', notes?.toc ?? 'Nil', 14)
+    nilRow('FOC Operations', notes?.foc ?? 'Nil')
 
     y += 6
   }
