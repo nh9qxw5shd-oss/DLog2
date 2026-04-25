@@ -3,6 +3,7 @@
 import {
   LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather,
   deriveUpcomingDays, deriveWeatherLevel,
+  SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
 } from './types'
 
 type RGB = [number, number, number]
@@ -219,6 +220,79 @@ export async function generatePDF(log: LogState): Promise<void> {
     weatherRow('Weather\nLondon North', lnDays)
     textRow('TOC Operations\n& Depot start up', notes.toc, 14)
     textRow('FOC Operations', notes.foc)
+
+    // ── Summer: Steam Fire Risk row ──────────────────────────────────────────
+    if (log.seasonMode === 'Summer') {
+      const STEAM_BG: Record<SteamFireRiskLevel, RGB> = {
+        GREEN: [ 39, 174,  96],
+        AMBER: [245, 158,  11],
+        RED:   [231,  76,  60],
+        BLACK: [ 17,  17,  17],
+      }
+      const STEAM_FG: Record<SteamFireRiskLevel, RGB> = {
+        GREEN: [255, 255, 255],
+        AMBER: [  0,  31,  69],
+        RED:   [255, 255, 255],
+        BLACK: [255, 255, 255],
+      }
+      const STEAM_LABELS: Record<SteamFireRiskLevel, string> = {
+        GREEN: 'Green', AMBER: 'Amber', RED: 'Red', BLACK: 'Black',
+      }
+      const steamH = 14
+      cell(M, y, labelW, steamH, [232, 236, 241])
+      sf('bold', 7); stc(C.navy)
+      tx('Steam Fire Risk', M + 3, y + 9)
+      const steamRisk = log.steamFireRisk ?? Array(5).fill('GREEN')
+      steamRisk.forEach((level, i) => {
+        const cx = M + labelW + i * dayW
+        cell(cx, y, dayW, steamH, STEAM_BG[level as SteamFireRiskLevel])
+        sf('bold', 8); stc(STEAM_FG[level as SteamFireRiskLevel])
+        tx(STEAM_LABELS[level as SteamFireRiskLevel], cx + dayW / 2, y + 9, { align: 'center' })
+      })
+      y += steamH
+    }
+
+    // ── Autumn: Adhesion rows ────────────────────────────────────────────────
+    if (log.seasonMode === 'Autumn') {
+      const ADHES_BG: Record<AdhesionLevel, RGB> = {
+        GOOD_1_2:        [ 26,  86,  49],
+        DAMP_3:          [ 39, 174,  96],
+        MODERATE_4_5:    [241, 196,  15],
+        POOR_5_8:        [231,  76,  60],
+        VERY_POOR_9_10:  [ 17,  17,  17],
+      }
+      const ADHES_FG: Record<AdhesionLevel, RGB> = {
+        GOOD_1_2:        [255, 255, 255],
+        DAMP_3:          [255, 255, 255],
+        MODERATE_4_5:    [  0,  31,  69],
+        POOR_5_8:        [255, 255, 255],
+        VERY_POOR_9_10:  [255, 255, 255],
+      }
+      const ADHES_LABEL: Record<AdhesionLevel, string> = Object.fromEntries(
+        ADHESION_LEVEL_OPTIONS.map(o => [o.value, o.label])
+      ) as Record<AdhesionLevel, string>
+
+      const adhesH = 16
+      const drawAdhesionRow = (label: string, levels: AdhesionLevel[]) => {
+        cell(M, y, labelW, adhesH, [232, 236, 241])
+        sf('bold', 7); stc(C.navy)
+        const llines = doc.splitTextToSize(label, labelW - 6)
+        tx(llines.slice(0, 2), M + 3, y + 6)
+        levels.forEach((level, i) => {
+          const cx = M + labelW + i * dayW
+          cell(cx, y, dayW, adhesH, ADHES_BG[level])
+          const lines = doc.splitTextToSize(ADHES_LABEL[level], dayW - 3)
+          sf('bold', 7); stc(ADHES_FG[level])
+          tx(lines.slice(0, 2), cx + dayW / 2, y + adhesH / 2 + 1.5, { align: 'center' })
+        })
+        y += adhesH
+      }
+
+      const eastMids = (log.eastMidsAdhesion ?? Array(5).fill('GOOD_1_2')) as AdhesionLevel[]
+      const lincoln  = (log.lincolnAdhesion  ?? Array(5).fill('GOOD_1_2')) as AdhesionLevel[]
+      drawAdhesionRow('East Mids Adhesion', eastMids)
+      drawAdhesionRow('Lincoln Adhesion',   lincoln)
+    }
 
     y += 6
   }

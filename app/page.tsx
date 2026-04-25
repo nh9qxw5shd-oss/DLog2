@@ -12,6 +12,8 @@ import {
   HazardLevel, RiskLevel, WeatherRisk, DayWeather,
   WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveUpcomingDays,
   makeEmptyFiveDayWeather, makeEmptyLookAheadNotes,
+  SeasonMode, SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
+  makeEmptySeasonalData,
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
@@ -60,6 +62,7 @@ const BLANK_LOG: LogState = {
   incidents: [],
   fiveDayWeather: makeEmptyFiveDayWeather(),
   lookAheadNotes: makeEmptyLookAheadNotes(),
+  ...makeEmptySeasonalData(),
   status: 'empty',
 }
 
@@ -235,6 +238,164 @@ const RISK_LEVEL_DOT: Record<RiskLevel, string> = {
   EXTREME: 'bg-[#C0392B]',
 }
 
+// ─── Seasonal cell display constants ─────────────────────────────────────────
+
+const STEAM_FIRE_BG: Record<SteamFireRiskLevel, string> = {
+  GREEN: 'bg-[#27AE60]',
+  AMBER: 'bg-[#F59E0B]',
+  RED:   'bg-[#E74C3C]',
+  BLACK: 'bg-[#111111]',
+}
+const STEAM_FIRE_TEXT: Record<SteamFireRiskLevel, string> = {
+  GREEN: 'text-white',
+  AMBER: 'text-[#001F45]',
+  RED:   'text-white',
+  BLACK: 'text-white',
+}
+const STEAM_FIRE_LABELS: Record<SteamFireRiskLevel, string> = {
+  GREEN: 'Green',
+  AMBER: 'Amber',
+  RED:   'Red',
+  BLACK: 'Black',
+}
+
+const ADHESION_BG: Record<AdhesionLevel, string> = {
+  GOOD_1_2:        'bg-[#1A5631]',
+  DAMP_3:          'bg-[#27AE60]',
+  MODERATE_4_5:    'bg-[#F1C40F]',
+  POOR_5_8:        'bg-[#E74C3C]',
+  VERY_POOR_9_10:  'bg-[#111111]',
+}
+const ADHESION_TEXT: Record<AdhesionLevel, string> = {
+  GOOD_1_2:        'text-white',
+  DAMP_3:          'text-white',
+  MODERATE_4_5:    'text-[#001F45]',
+  POOR_5_8:        'text-white',
+  VERY_POOR_9_10:  'text-white',
+}
+
+// ─── Steam Fire Risk cell ─────────────────────────────────────────────────────
+
+const STEAM_OPTIONS: SteamFireRiskLevel[] = ['GREEN', 'AMBER', 'RED', 'BLACK']
+
+function SteamFireRiskCell({ value, isOpen, onOpen, onClose, onChange }: {
+  value:    SteamFireRiskLevel
+  isOpen:   boolean
+  onOpen:   () => void
+  onClose:  () => void
+  onChange: (v: SteamFireRiskLevel) => void
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [isOpen, onClose])
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          STEAM_FIRE_BG[value], STEAM_FIRE_TEXT[value],
+          'w-full min-h-[42px] rounded px-1 py-1 text-center leading-tight',
+          'hover:ring-2 hover:ring-white transition-all',
+          isOpen && 'ring-2 ring-white',
+        )}
+      >
+        <div className="text-[10px] font-bold">{STEAM_FIRE_LABELS[value]}</div>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 top-full mt-1 left-0 w-28 bg-[#0F1629] border border-[rgba(74,111,165,0.4)] rounded p-1.5 shadow-xl">
+          <div className="space-y-1">
+            {STEAM_OPTIONS.map(opt => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => { onChange(opt); onClose() }}
+                className={cn(
+                  STEAM_FIRE_BG[opt], STEAM_FIRE_TEXT[opt],
+                  'w-full text-[10px] font-bold py-1.5 rounded transition-all',
+                  value === opt && 'ring-2 ring-white',
+                )}
+              >
+                {STEAM_FIRE_LABELS[opt]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Adhesion cell ────────────────────────────────────────────────────────────
+
+function AdhesionCell({ value, isOpen, onOpen, onClose, onChange }: {
+  value:    AdhesionLevel
+  isOpen:   boolean
+  onOpen:   () => void
+  onClose:  () => void
+  onChange: (v: AdhesionLevel) => void
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [isOpen, onClose])
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          ADHESION_BG[value], ADHESION_TEXT[value],
+          'w-full min-h-[42px] rounded px-1 py-1 text-center leading-tight',
+          'hover:ring-2 hover:ring-white transition-all',
+          isOpen && 'ring-2 ring-white',
+        )}
+      >
+        <div className="text-[10px] font-bold">
+          {ADHESION_LEVEL_OPTIONS.find(o => o.value === value)?.label ?? value}
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 top-full mt-1 left-0 w-36 bg-[#0F1629] border border-[rgba(74,111,165,0.4)] rounded p-1.5 shadow-xl">
+          <div className="space-y-1">
+            {ADHESION_LEVEL_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { onChange(opt.value); onClose() }}
+                className={cn(
+                  ADHESION_BG[opt.value], ADHESION_TEXT[opt.value],
+                  'w-full text-[10px] font-bold py-1.5 rounded transition-all',
+                  value === opt.value && 'ring-2 ring-white',
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Weather cell with inline risk editor ────────────────────────────────────
 
 function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
@@ -334,18 +495,22 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
 
 // ─── 5 Day Look Ahead config component ───────────────────────────────────────
 
+const SEASON_MODES: SeasonMode[] = ['Standard', 'Summer', 'Autumn']
+
 function FiveDaySection({ log, onChange }: {
   log:      LogState
   onChange: (updates: Partial<LogState>) => void
 }) {
-  type EditTarget = { route: 'eastMidlands' | 'londonNorth'; dayIdx: number }
+  type EditTarget =
+    | { kind: 'weather';   route: 'eastMidlands' | 'londonNorth'; dayIdx: number }
+    | { kind: 'steam';     dayIdx: number }
+    | { kind: 'adhesion';  row: 'eastMids' | 'lincoln';           dayIdx: number }
   const [editing, setEditing] = useState<EditTarget | null>(null)
 
-  const weather = log.fiveDayWeather
-  const notes   = log.lookAheadNotes
+  const weather  = log.fiveDayWeather
+  const notes    = log.lookAheadNotes
+  const season   = log.seasonMode ?? 'Standard'
 
-  // Forward-looking: always starts at today's day-of-week. Populated after
-  // mount so the initial server-rendered markup stays deterministic.
   const [days, setDays] = useState<string[]>(['', '', '', '', ''])
   useEffect(() => { setDays(deriveUpcomingDays()) }, [])
 
@@ -369,6 +534,19 @@ function FiveDaySection({ log, onChange }: {
     onChange({ fiveDayWeather: { ...weather, [route]: routeDays } })
   }
 
+  const updateSteamFire = (dayIdx: number, val: SteamFireRiskLevel) => {
+    const next = [...(log.steamFireRisk ?? Array(5).fill('GREEN'))]
+    next[dayIdx] = val
+    onChange({ steamFireRisk: next as SteamFireRiskLevel[] })
+  }
+
+  const updateAdhesion = (row: 'eastMids' | 'lincoln', dayIdx: number, val: AdhesionLevel) => {
+    const key = row === 'eastMids' ? 'eastMidsAdhesion' : 'lincolnAdhesion'
+    const next = [...(log[key] ?? Array(5).fill('GOOD_1_2'))]
+    next[dayIdx] = val
+    onChange({ [key]: next as AdhesionLevel[] })
+  }
+
   const weatherRowRoutes: Array<{ key: 'eastMidlands' | 'londonNorth'; label: string }> = [
     { key: 'eastMidlands', label: 'Weather East Midlands' },
     { key: 'londonNorth',  label: 'Weather London North'  },
@@ -379,11 +557,37 @@ function FiveDaySection({ log, onChange }: {
     { key: 'foc', label: 'FOC Operations'                  },
   ]
 
+  const steamFireRisk    = log.steamFireRisk    ?? Array(5).fill('GREEN')
+  const eastMidsAdhesion = log.eastMidsAdhesion ?? Array(5).fill('GOOD_1_2')
+  const lincolnAdhesion  = log.lincolnAdhesion  ?? Array(5).fill('GOOD_1_2')
+
   return (
     <div className="card p-4 space-y-3">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead</p>
         <p className="text-[10px] text-[#4A5A72]">Click a weather cell to pick risks &amp; severity · text cells are free-form (default Nil)</p>
+      </div>
+
+      {/* Season selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-[#4A5A72] font-semibold uppercase tracking-wider">Season:</span>
+        <div className="flex gap-1">
+          {SEASON_MODES.map(mode => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onChange({ seasonMode: mode })}
+              className={cn(
+                'px-3 py-1 text-[11px] font-semibold rounded transition-all',
+                season === mode
+                  ? 'bg-[#E05206] text-white'
+                  : 'bg-[#0A0F1E] text-[#7A8BA8] border border-[rgba(74,111,165,0.3)] hover:border-[#E05206] hover:text-white',
+              )}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="overflow-visible">
@@ -428,8 +632,8 @@ function FiveDaySection({ log, onChange }: {
                   <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
                     <WeatherCell
                       day={d}
-                      isOpen={editing?.route === key && editing.dayIdx === i}
-                      onOpen={() => setEditing({ route: key, dayIdx: i })}
+                      isOpen={editing?.kind === 'weather' && editing.route === key && editing.dayIdx === i}
+                      onOpen={() => setEditing({ kind: 'weather', route: key, dayIdx: i })}
                       onClose={() => setEditing(null)}
                       onToggle={(risk, level) => toggleRisk(key, i, risk, level)}
                     />
@@ -456,6 +660,53 @@ function FiveDaySection({ log, onChange }: {
                 ))}
               </tr>
             ))}
+
+            {/* Summer: Steam Fire Risk row */}
+            {season === 'Summer' && (
+              <tr>
+                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
+                  Steam Fire Risk
+                </td>
+                {steamFireRisk.map((v, i) => (
+                  <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
+                    <SteamFireRiskCell
+                      value={v as SteamFireRiskLevel}
+                      isOpen={editing?.kind === 'steam' && editing.dayIdx === i}
+                      onOpen={() => setEditing({ kind: 'steam', dayIdx: i })}
+                      onClose={() => setEditing(null)}
+                      onChange={val => updateSteamFire(i, val)}
+                    />
+                  </td>
+                ))}
+              </tr>
+            )}
+
+            {/* Autumn: Adhesion rows */}
+            {season === 'Autumn' && (
+              <>
+                {([
+                  { rowKey: 'eastMids' as const, label: 'East Mids Adhesion', data: eastMidsAdhesion },
+                  { rowKey: 'lincoln'  as const, label: 'Lincoln Adhesion',   data: lincolnAdhesion  },
+                ] as const).map(({ rowKey, label, data }) => (
+                  <tr key={rowKey}>
+                    <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
+                      {label}
+                    </td>
+                    {data.map((v, i) => (
+                      <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
+                        <AdhesionCell
+                          value={v as AdhesionLevel}
+                          isOpen={editing?.kind === 'adhesion' && editing.row === rowKey && editing.dayIdx === i}
+                          onOpen={() => setEditing({ kind: 'adhesion', row: rowKey, dayIdx: i })}
+                          onClose={() => setEditing(null)}
+                          onChange={val => updateAdhesion(rowKey, i, val)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </>
+            )}
           </tbody>
         </table>
       </div>
