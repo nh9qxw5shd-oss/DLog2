@@ -5,6 +5,9 @@ import {
   deriveUpcomingDays, deriveWeatherLevel,
   SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
 } from './types'
+import type { ChartImages } from './chartRenderer'
+
+export type { ChartImages }
 
 type RGB = [number, number, number]
 
@@ -69,7 +72,7 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
     if (!svgW || !svgH || isNaN(svgW) || isNaN(svgH)) { svgW = 100; svgH = 100 }
     const aspect = svgW / svgH
 
-    const scale = 4
+    const scale = 2
     const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }))
 
     return new Promise(resolve => {
@@ -104,12 +107,12 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function generatePDF(log: LogState): Promise<void> {
+export async function generatePDF(log: LogState, chartImages?: ChartImages): Promise<void> {
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
   const W = 210, H = 297, M = 14
   let y = 0
 
@@ -649,7 +652,54 @@ export async function generatePDF(log: LogState): Promise<void> {
     y = getAutoY() + 8
   }
 
-  // ── 7. Appendix: compact detail + chronology ──────────────────────────────
+  // ── 7. Historical Trends (embedded chart images from Supabase) ───────────
+  if (chartImages) {
+    newPage()
+    sectionHead(
+      'HISTORICAL TRENDS — EMCC INCIDENT DATA',
+      `${chartImages.reportCount} report${chartImages.reportCount !== 1 ? 's' : ''} in database`
+    )
+
+    const chartW = W - M * 2
+
+    // Chart 1: dual-line trend — canvas 1400×420
+    const trendH = chartW * (420 / 1400)
+    doc.addImage(chartImages.delayTrend, 'JPEG', M, y, chartW, trendH)
+    y += trendH + 6
+
+    // Chart 2: category horizontal bar — canvas 1400×460
+    checkPage(68)
+    const catH = chartW * (460 / 1400)
+    doc.addImage(chartImages.categoryBreakdown, 'JPEG', M, y, chartW, catH)
+    y += catH + 6
+
+    // Chart 3: top locations bar — canvas 1400×460
+    checkPage(68)
+    const locH = chartW * (460 / 1400)
+    doc.addImage(chartImages.topLocations, 'JPEG', M, y, chartW, locH)
+    y += locH + 8
+
+    // ── Page 2: Safety & Operational Analysis ─────────────────────────────
+    newPage()
+    sectionHead('SAFETY & OPERATIONAL ANALYSIS', 'Timing patterns · Efficiency · Safety-critical evolution')
+
+    // Chart 4: time of day — canvas 1400×400
+    const timeH = chartW * (400 / 1400)
+    doc.addImage(chartImages.timeOfDay, 'JPEG', M, y, chartW, timeH)
+    y += timeH + 6
+
+    // Chart 5: average delay per incident — canvas 1400×400
+    checkPage(timeH + 10)
+    doc.addImage(chartImages.avgDelayTrend, 'JPEG', M, y, chartW, timeH)
+    y += timeH + 6
+
+    // Chart 6: safety-critical stacked bar — canvas 1400×460
+    checkPage(catH + 10)
+    doc.addImage(chartImages.safetyCategoryTrend, 'JPEG', M, y, chartW, catH)
+    y += catH + 8
+  }
+
+  // ── 8. Appendix: compact detail + chronology ──────────────────────────────
   if (log.incidents.length > 0) {
     newPage()
     sectionHead('APPENDIX — CCIL INCIDENT DETAIL LOG', 'Compact detail table + chronological event timeline')
@@ -678,7 +728,7 @@ export async function generatePDF(log: LogState): Promise<void> {
         String(inc.cancelled || 0),
         String(inc.partCancelled || 0),
       ]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6.4, cellPadding: 1.6, lineColor: C.lightGray, lineWidth: 0.1 },
@@ -700,6 +750,7 @@ export async function generatePDF(log: LogState): Promise<void> {
           data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.black
         }
       },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 8
 
@@ -735,7 +786,7 @@ export async function generatePDF(log: LogState): Promise<void> {
       startY: y + 3,
       head: [['Date', 'Time', 'CCIL', 'Co', 'Event / Entry']],
       body: eventRows.map((r) => [r[0], r[1], r[2], r[3], String(r[4]).slice(0, 220)]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6.2, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
@@ -747,9 +798,7 @@ export async function generatePDF(log: LogState): Promise<void> {
         3: { cellWidth: 12 },
         4: { cellWidth: 'auto' },
       },
-      didDrawPage: () => {
-        drawCompactHeader()
-      },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 6
   } else if (log.rawLogText) {
@@ -765,15 +814,13 @@ export async function generatePDF(log: LogState): Promise<void> {
       startY: y,
       head: [['Raw CCIL export lines']],
       body: rawLines.map((line) => [line.replace(/\r/g, '').slice(0, 300)]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
       alternateRowStyles: { fillColor: [247, 248, 251] as RGB },
       columnStyles: { 0: { cellWidth: 'auto' } },
-      didDrawPage: () => {
-        drawCompactHeader()
-      },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 6
   }
