@@ -17,6 +17,8 @@ import {
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
+import { isSupabaseConfigured, upsertReportData, fetchHistoricalData } from '@/lib/supabaseClient'
+import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -1141,16 +1143,40 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
   const [generating, setGenerating] = useState(false)
   const [done, setDone]             = useState(false)
   const [error, setError]           = useState('')
+  const [statusMsg, setStatusMsg]   = useState('')
+  const [dbReports, setDbReports]   = useState<number | null>(null)
 
   const handle = async () => {
-    setGenerating(true); setError('')
+    setGenerating(true); setError(''); setStatusMsg('')
+
+    let chartImages: ChartImages | undefined
+
     try {
-      await generatePDF(log)
+      if (isSupabaseConfigured()) {
+        // 1. Push this report's data to Supabase (upsert = de-dupe by date)
+        setStatusMsg('Syncing with database…')
+        await upsertReportData(log)
+
+        // 2. Fetch all historical data for chart rendering
+        setStatusMsg('Fetching historical trends…')
+        const historical = await fetchHistoricalData()
+
+        if (historical && historical.trendPoints.length > 0) {
+          setDbReports(historical.reportCount)
+          // 3. Render Chart.js charts to PNG data URLs
+          setStatusMsg('Rendering trend charts…')
+          chartImages = await renderHistoricalCharts(historical)
+        }
+      }
+
+      // 4. Build and download PDF (with charts if available)
+      setStatusMsg('Building PDF…')
+      await generatePDF(log, chartImages)
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
     } finally {
-      setGenerating(false)
+      setGenerating(false); setStatusMsg('')
     }
   }
 
@@ -1199,6 +1225,17 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (manual entry)</div>
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
+          {isSupabaseConfigured()
+            ? <div className="flex items-center gap-2">
+                <Check size={11} className="text-[#27AE60]" />
+                Historical trend charts
+                {dbReports !== null && <span className="text-[#7A8BA8]">({dbReports} report{dbReports !== 1 ? 's' : ''} in DB)</span>}
+              </div>
+            : <div className="flex items-center gap-2 text-[#4A5A72] opacity-50">
+                <span className="w-[11px] h-[11px] rounded-full border border-current inline-block" />
+                Historical trends (Supabase not configured)
+              </div>
+          }
         </div>
       </div>
 
@@ -1212,7 +1249,10 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
       {done && (
         <div className="flex items-center gap-3 p-4 rounded bg-[rgba(39,174,96,0.1)] border border-[rgba(39,174,96,0.3)]">
           <Check size={16} className="text-green-400" />
-          <p className="text-green-400 text-sm font-medium">PDF downloaded successfully.</p>
+          <p className="text-green-400 text-sm font-medium">
+            PDF downloaded successfully.
+            {dbReports !== null && ` Historical trends from ${dbReports} report${dbReports !== 1 ? 's' : ''} included.`}
+          </p>
         </div>
       )}
 
@@ -1222,9 +1262,11 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
             'w-full py-3 text-white text-sm font-bold rounded flex items-center justify-center gap-3 transition-all',
             generating ? 'bg-[#4A6FA5] cursor-not-allowed' : 'bg-[#E05206] hover:bg-[#c44804]'
           )}>
-          {generating ? <><Loader2 size={16} className="animate-spin" /> Building PDF…</>
-           : done      ? <><RefreshCw size={16} /> Regenerate PDF</>
-           :             <><Download size={16} /> Generate &amp; Download PDF</>}
+          {generating
+            ? <><Loader2 size={16} className="animate-spin" /> {statusMsg || 'Building PDF…'}</>
+            : done
+            ? <><RefreshCw size={16} /> Regenerate PDF</>
+            : <><Download size={16} /> Generate &amp; Download PDF</>}
         </button>
         <p className="text-center text-xs text-[#4A5A72] font-mono">OFFICIAL-SENSITIVE — Handle per NR information policy</p>
       </div>

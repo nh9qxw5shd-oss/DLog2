@@ -5,6 +5,9 @@ import {
   deriveUpcomingDays, deriveWeatherLevel,
   SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
 } from './types'
+import type { ChartImages } from './chartRenderer'
+
+export type { ChartImages }
 
 type RGB = [number, number, number]
 
@@ -104,7 +107,7 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function generatePDF(log: LogState): Promise<void> {
+export async function generatePDF(log: LogState, chartImages?: ChartImages): Promise<void> {
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
@@ -649,7 +652,36 @@ export async function generatePDF(log: LogState): Promise<void> {
     y = getAutoY() + 8
   }
 
-  // ── 7. Appendix: compact detail + chronology ──────────────────────────────
+  // ── 7. Historical Trends (embedded chart images from Supabase) ───────────
+  if (chartImages) {
+    newPage()
+    sectionHead(
+      'HISTORICAL TRENDS — EMCC INCIDENT DATA',
+      `${chartImages.reportCount} report${chartImages.reportCount !== 1 ? 's' : ''} in database`
+    )
+
+    // Available width for charts
+    const chartW = W - M * 2
+
+    // Chart 1: delay trend line — canvas was 1400×400 → ~57mm tall in PDF
+    const lineH = chartW * (400 / 1400)
+    sf('bold', 7.5); stc(C.navy)
+    tx('Total Delay Minutes per Reporting Period', M, y)
+    y += 4
+    doc.addImage(chartImages.delayTrend, 'PNG', M, y, chartW, lineH)
+    y += lineH + 8
+
+    // Chart 2: category horizontal bar — canvas was 1400×500 → ~65mm tall in PDF
+    checkPage(75)
+    const barH = chartW * (500 / 1400)
+    sf('bold', 7.5); stc(C.navy)
+    tx('Incident Type Distribution (All Reporting Periods)', M, y)
+    y += 4
+    doc.addImage(chartImages.categoryBreakdown, 'PNG', M, y, chartW, barH)
+    y += barH + 8
+  }
+
+  // ── 8. Appendix: compact detail + chronology ──────────────────────────────
   if (log.incidents.length > 0) {
     newPage()
     sectionHead('APPENDIX — CCIL INCIDENT DETAIL LOG', 'Compact detail table + chronological event timeline')
