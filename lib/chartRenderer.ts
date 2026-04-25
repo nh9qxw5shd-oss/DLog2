@@ -33,6 +33,7 @@ function shortDate(iso: string): string {
 async function loadChart() {
   const {
     Chart,
+    LineController, BarController,
     CategoryScale, LinearScale,
     PointElement, LineElement,
     BarElement,
@@ -40,6 +41,7 @@ async function loadChart() {
   } = await import('chart.js')
 
   Chart.register(
+    LineController, BarController,
     CategoryScale, LinearScale,
     PointElement, LineElement,
     BarElement,
