@@ -159,7 +159,7 @@ export async function generatePDF(log: LogState): Promise<void> {
     if (insignia) {
       const imgH = 22
       const imgW = imgH * insignia.aspect
-      doc.addImage(insignia.dataUrl, 'PNG', W / 2 - imgW / 2, (52 - imgH) / 2, imgW, imgH)
+      doc.addImage(insignia.dataUrl, 'PNG', W / 2 - imgW / 2, 5, imgW, imgH)
     }
     return 70
   }
