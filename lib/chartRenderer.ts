@@ -177,9 +177,15 @@ function drawDualLineChart(
   const pyD = (i: number) => CY + CH - (delayVals[i] / maxDelay) * CH
   const pyC = (i: number) => CY + CH - (countVals[i] / maxCount) * CH
 
-  ctx.beginPath(); ctx.moveTo(px(0), CY + CH)
-  bezierPath(ctx, n, px, pyD)
-  ctx.lineTo(px(n - 1), CY + CH); ctx.closePath()
+  ctx.beginPath()
+  ctx.moveTo(px(0), CY + CH)
+  ctx.lineTo(px(0), pyD(0))
+  for (let i = 1; i < n; i++) {
+    const mx = (px(i - 1) + px(i)) / 2
+    ctx.bezierCurveTo(mx, pyD(i - 1), mx, pyD(i), px(i), pyD(i))
+  }
+  ctx.lineTo(px(n - 1), CY + CH)
+  ctx.closePath()
   ctx.fillStyle = 'rgba(224,82,6,0.10)'; ctx.fill()
 
   ctx.beginPath(); ctx.strokeStyle = ORANGE; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'
@@ -334,9 +340,15 @@ function drawAvgDelayChart(
   const px = (i: number) => n === 1 ? CX + CW / 2 : CX + (i / (n - 1)) * CW
   const py = (i: number) => CY + CH - (values[i] / maxVal) * CH
 
-  ctx.beginPath(); ctx.moveTo(px(0), CY + CH)
-  bezierPath(ctx, n, px, py)
-  ctx.lineTo(px(n - 1), CY + CH); ctx.closePath()
+  ctx.beginPath()
+  ctx.moveTo(px(0), CY + CH)
+  ctx.lineTo(px(0), py(0))
+  for (let i = 1; i < n; i++) {
+    const mx = (px(i - 1) + px(i)) / 2
+    ctx.bezierCurveTo(mx, py(i - 1), mx, py(i), px(i), py(i))
+  }
+  ctx.lineTo(px(n - 1), CY + CH)
+  ctx.closePath()
   ctx.fillStyle = 'rgba(74,111,165,0.12)'; ctx.fill()
 
   ctx.beginPath(); ctx.strokeStyle = STEEL; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'
