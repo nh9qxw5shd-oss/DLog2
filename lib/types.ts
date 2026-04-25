@@ -86,6 +86,36 @@ export function makeEmptyLookAheadNotes(): LookAheadNotes {
   }
 }
 
+// ─── Seasonal rows ────────────────────────────────────────────────────────────
+
+export type SeasonMode = 'Standard' | 'Summer' | 'Autumn'
+
+export type SteamFireRiskLevel = 'GREEN' | 'AMBER' | 'RED' | 'BLACK'
+
+export type AdhesionLevel =
+  | 'GOOD_1_2'
+  | 'DAMP_3'
+  | 'MODERATE_4_5'
+  | 'POOR_5_8'
+  | 'VERY_POOR_9_10'
+
+export const ADHESION_LEVEL_OPTIONS: Array<{ value: AdhesionLevel; label: string }> = [
+  { value: 'GOOD_1_2',        label: 'Good (1-2)'      },
+  { value: 'DAMP_3',          label: 'Damp (3)'         },
+  { value: 'MODERATE_4_5',    label: 'Moderate (4-5)'   },
+  { value: 'POOR_5_8',        label: 'Poor (5-8)'       },
+  { value: 'VERY_POOR_9_10',  label: 'Very Poor (9-10)' },
+]
+
+export function makeEmptySeasonalData() {
+  return {
+    seasonMode:       'Standard' as SeasonMode,
+    steamFireRisk:    Array.from({ length: 5 }, (): SteamFireRiskLevel => 'GREEN'),
+    eastMidsAdhesion: Array.from({ length: 5 }, (): AdhesionLevel => 'GOOD_1_2'),
+    lincolnAdhesion:  Array.from({ length: 5 }, (): AdhesionLevel => 'GOOD_1_2'),
+  }
+}
+
 // ─── Incident Types ───────────────────────────────────────────────────────────
 
 export type IncidentCategory =
@@ -170,6 +200,10 @@ export interface LogState {
   rawLogText?: string        // verbatim CCIL text for appendix
   fiveDayWeather: FiveDayWeather
   lookAheadNotes: LookAheadNotes
+  seasonMode: SeasonMode
+  steamFireRisk: SteamFireRiskLevel[]    // 5 entries
+  eastMidsAdhesion: AdhesionLevel[]      // 5 entries
+  lincolnAdhesion: AdhesionLevel[]       // 5 entries
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 
