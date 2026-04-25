@@ -476,12 +476,12 @@ export async function renderHistoricalCharts(
   drawStackedBarChart(c6, safeLabels, safeDatasets)
 
   return {
-    delayTrend:          c1.toDataURL('image/png'),
-    categoryBreakdown:   c2.toDataURL('image/png'),
-    topLocations:        c3.toDataURL('image/png'),
-    timeOfDay:           c4.toDataURL('image/png'),
-    avgDelayTrend:       c5.toDataURL('image/png'),
-    safetyCategoryTrend: c6.toDataURL('image/png'),
+    delayTrend:          c1.toDataURL('image/jpeg', 0.82),
+    categoryBreakdown:   c2.toDataURL('image/jpeg', 0.82),
+    topLocations:        c3.toDataURL('image/jpeg', 0.82),
+    timeOfDay:           c4.toDataURL('image/jpeg', 0.82),
+    avgDelayTrend:       c5.toDataURL('image/jpeg', 0.82),
+    safetyCategoryTrend: c6.toDataURL('image/jpeg', 0.82),
     reportCount:         data.reportCount,
   }
 }

@@ -72,7 +72,7 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
     if (!svgW || !svgH || isNaN(svgW) || isNaN(svgH)) { svgW = 100; svgH = 100 }
     const aspect = svgW / svgH
 
-    const scale = 4
+    const scale = 2
     const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }))
 
     return new Promise(resolve => {
@@ -112,7 +112,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
   const W = 210, H = 297, M = 14
   let y = 0
 
@@ -664,19 +664,19 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
 
     // Chart 1: dual-line trend — canvas 1400×420
     const trendH = chartW * (420 / 1400)
-    doc.addImage(chartImages.delayTrend, 'PNG', M, y, chartW, trendH)
+    doc.addImage(chartImages.delayTrend, 'JPEG', M, y, chartW, trendH)
     y += trendH + 6
 
     // Chart 2: category horizontal bar — canvas 1400×460
     checkPage(68)
     const catH = chartW * (460 / 1400)
-    doc.addImage(chartImages.categoryBreakdown, 'PNG', M, y, chartW, catH)
+    doc.addImage(chartImages.categoryBreakdown, 'JPEG', M, y, chartW, catH)
     y += catH + 6
 
     // Chart 3: top locations bar — canvas 1400×460
     checkPage(68)
     const locH = chartW * (460 / 1400)
-    doc.addImage(chartImages.topLocations, 'PNG', M, y, chartW, locH)
+    doc.addImage(chartImages.topLocations, 'JPEG', M, y, chartW, locH)
     y += locH + 8
 
     // ── Page 2: Safety & Operational Analysis ─────────────────────────────
@@ -685,17 +685,17 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
 
     // Chart 4: time of day — canvas 1400×400
     const timeH = chartW * (400 / 1400)
-    doc.addImage(chartImages.timeOfDay, 'PNG', M, y, chartW, timeH)
+    doc.addImage(chartImages.timeOfDay, 'JPEG', M, y, chartW, timeH)
     y += timeH + 6
 
     // Chart 5: average delay per incident — canvas 1400×400
     checkPage(timeH + 10)
-    doc.addImage(chartImages.avgDelayTrend, 'PNG', M, y, chartW, timeH)
+    doc.addImage(chartImages.avgDelayTrend, 'JPEG', M, y, chartW, timeH)
     y += timeH + 6
 
     // Chart 6: safety-critical stacked bar — canvas 1400×460
     checkPage(catH + 10)
-    doc.addImage(chartImages.safetyCategoryTrend, 'PNG', M, y, chartW, catH)
+    doc.addImage(chartImages.safetyCategoryTrend, 'JPEG', M, y, chartW, catH)
     y += catH + 8
   }
 
