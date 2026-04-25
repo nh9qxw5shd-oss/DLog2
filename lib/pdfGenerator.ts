@@ -52,7 +52,10 @@ const SEV_COLOR: Record<string, RGB> = {
 async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: number } | null> {
   try {
     const resp = await fetch(url)
-    if (!resp.ok) return null
+    if (!resp.ok) {
+      console.warn(`[insignia] fetch failed: ${resp.status} ${url}`)
+      return null
+    }
     const svgText = await resp.text()
 
     const svgEl = new DOMParser().parseFromString(svgText, 'image/svg+xml').documentElement
@@ -60,28 +63,41 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
     let svgH = parseFloat(svgEl.getAttribute('height') ?? '0')
     if (!svgW || !svgH) {
       const vb = svgEl.getAttribute('viewBox')?.split(/[\s,]+/)
-      if (vb?.length === 4) { svgW = parseFloat(vb[2]); svgH = parseFloat(vb[3]) }
+      if (vb && vb.length >= 4) { svgW = parseFloat(vb[2]); svgH = parseFloat(vb[3]) }
     }
-    const aspect = (svgW && svgH) ? svgW / svgH : 1
+    // Fall back to a square if dimensions are still unknown
+    if (!svgW || !svgH || isNaN(svgW) || isNaN(svgH)) { svgW = 100; svgH = 100 }
+    const aspect = svgW / svgH
 
     const scale = 4
-    const cw = Math.round((svgW || 100) * scale)
-    const ch = Math.round((svgH || 100) * scale)
     const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }))
 
     return new Promise(resolve => {
       const img = new Image()
       img.onload = () => {
+        const cw = Math.round(svgW * scale)
+        const ch = Math.round(svgH * scale)
         const canvas = document.createElement('canvas')
         canvas.width = cw; canvas.height = ch
-        canvas.getContext('2d')!.drawImage(img, 0, 0, cw, ch)
-        URL.revokeObjectURL(blobUrl)
-        resolve({ dataUrl: canvas.toDataURL('image/png'), aspect })
+        try {
+          canvas.getContext('2d')!.drawImage(img, 0, 0, cw, ch)
+          URL.revokeObjectURL(blobUrl)
+          resolve({ dataUrl: canvas.toDataURL('image/png'), aspect })
+        } catch (e) {
+          console.warn('[insignia] canvas export failed (tainted?)', e)
+          URL.revokeObjectURL(blobUrl)
+          resolve(null)
+        }
       }
-      img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(null) }
+      img.onerror = (e) => {
+        console.warn('[insignia] image load failed', e)
+        URL.revokeObjectURL(blobUrl)
+        resolve(null)
+      }
       img.src = blobUrl
     })
-  } catch {
+  } catch (e) {
+    console.warn('[insignia] unexpected error', e)
     return null
   }
 }
