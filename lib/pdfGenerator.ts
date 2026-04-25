@@ -678,6 +678,25 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
     const locH = chartW * (460 / 1400)
     doc.addImage(chartImages.topLocations, 'PNG', M, y, chartW, locH)
     y += locH + 8
+
+    // ── Page 2: Safety & Operational Analysis ─────────────────────────────
+    newPage()
+    sectionHead('SAFETY & OPERATIONAL ANALYSIS', 'Timing patterns · Efficiency · Safety-critical evolution')
+
+    // Chart 4: time of day — canvas 1400×400
+    const timeH = chartW * (400 / 1400)
+    doc.addImage(chartImages.timeOfDay, 'PNG', M, y, chartW, timeH)
+    y += timeH + 6
+
+    // Chart 5: average delay per incident — canvas 1400×400
+    checkPage(timeH + 10)
+    doc.addImage(chartImages.avgDelayTrend, 'PNG', M, y, chartW, timeH)
+    y += timeH + 6
+
+    // Chart 6: safety-critical stacked bar — canvas 1400×460
+    checkPage(catH + 10)
+    doc.addImage(chartImages.safetyCategoryTrend, 'PNG', M, y, chartW, catH)
+    y += catH + 8
   }
 
   // ── 8. Appendix: compact detail + chronology ──────────────────────────────

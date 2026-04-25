@@ -42,10 +42,17 @@ export interface LocationBreakdown {
   count: number
 }
 
+export interface SafetyCategoryTrendPoint {
+  date: string
+  counts: Partial<Record<string, number>>
+}
+
 export interface HistoricalChartData {
   trendPoints: ReportTrendPoint[]
   categoryBreakdown: CategoryBreakdown[]
   locationBreakdown: LocationBreakdown[]
+  timeOfDayBreakdown: number[]               // 24 entries, index = hour (0–23)
+  safetyCategoryTrend: SafetyCategoryTrendPoint[]
   reportCount: number
 }
 
@@ -124,10 +131,10 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   const sb = getClient()
   if (!sb) return null
 
-  // Single query covers all three charts
+  // Single query covers all charts
   const { data: rows, error } = await sb
     .from('incidents')
-    .select('report_date, category, minutes_delay, location')
+    .select('report_date, category, minutes_delay, location, incident_start')
     .order('report_date', { ascending: true })
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
@@ -171,6 +178,27 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
     .sort((a, b) => b.count - a.count)
     .slice(0, 12)
 
+  // ── Time-of-day distribution (24-hour breakdown) ──────────────────────
+  const byHour = new Array(24).fill(0) as number[]
+  for (const row of rows ?? []) {
+    if (!row.incident_start) continue
+    const hour = parseInt((row.incident_start as string).split(':')[0] ?? '-1', 10)
+    if (hour >= 0 && hour < 24) byHour[hour]++
+  }
+
+  // ── Safety-critical category trend (per report date) ───────────────────
+  const SAFETY_KEYS = new Set(['SPAD','TPWS','NEAR_MISS','BRIDGE_STRIKE','PERSON_STRUCK','FATALITY'])
+  const safetyByDate = new Map<string, Record<string, number>>()
+  for (const row of rows ?? []) {
+    if (!SAFETY_KEYS.has(row.category)) continue
+    if (!safetyByDate.has(row.report_date)) safetyByDate.set(row.report_date, {})
+    const m = safetyByDate.get(row.report_date)!
+    m[row.category] = (m[row.category] ?? 0) + 1
+  }
+  const safetyCategoryTrend: SafetyCategoryTrendPoint[] = Array.from(safetyByDate.entries())
+    .map(([date, counts]) => ({ date, counts }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
   // Count distinct reports
   const { count, error: repErr } = await sb
     .from('reports')
@@ -182,6 +210,8 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
     trendPoints,
     categoryBreakdown,
     locationBreakdown,
+    timeOfDayBreakdown: byHour,
+    safetyCategoryTrend,
     reportCount: count ?? 0,
   }
 }
