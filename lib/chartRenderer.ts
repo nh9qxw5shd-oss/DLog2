@@ -28,13 +28,34 @@ function shortDate(iso: string): string {
   return `${parseInt(dd)} ${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mm)]}`
 }
 
+// Import Chart.js components explicitly — avoids the TDZ bug triggered by the
+// chart.js/auto barrel file in Next.js's webpack bundler.
+async function loadChart() {
+  const {
+    Chart,
+    CategoryScale, LinearScale,
+    PointElement, LineElement,
+    BarElement,
+    Title, Tooltip, Legend, Filler,
+  } = await import('chart.js')
+
+  Chart.register(
+    CategoryScale, LinearScale,
+    PointElement, LineElement,
+    BarElement,
+    Title, Tooltip, Legend, Filler,
+  )
+
+  return Chart
+}
+
+type ChartConstructor = Awaited<ReturnType<typeof loadChart>>
+
 async function renderChart(
+  Chart: ChartConstructor,
   canvas: HTMLCanvasElement,
   config: object
 ): Promise<string> {
-  // Dynamic import keeps Chart.js out of the initial bundle
-  const { Chart } = await import('chart.js/auto')
-
   return new Promise<string>((resolve, reject) => {
     try {
       const chart = new Chart(canvas, {
@@ -66,6 +87,9 @@ export async function renderHistoricalCharts(
     throw new Error('renderHistoricalCharts must be called in a browser context')
   }
 
+  // Load Chart.js once; both renders share the same registered instance
+  const Chart = await loadChart()
+
   // ── Chart 1: Delay minutes over time (line) ───────────────────────────────
   const canvas1 = document.createElement('canvas')
   canvas1.width  = CANVAS_W
@@ -74,7 +98,7 @@ export async function renderHistoricalCharts(
   // Limit to most recent 30 data points to keep the chart readable
   const trend = data.trendPoints.slice(-30)
 
-  const delayTrend = await renderChart(canvas1, {
+  const delayTrend = await renderChart(Chart, canvas1, {
     type: 'line',
     data: {
       labels: trend.map(p => shortDate(p.date)),
@@ -141,7 +165,7 @@ export async function renderHistoricalCharts(
   // Show all categories that appear in the data (already sorted desc by count)
   const cats = data.categoryBreakdown
 
-  const categoryBreakdown = await renderChart(canvas2, {
+  const categoryBreakdown = await renderChart(Chart, canvas2, {
     type: 'bar',
     data: {
       labels: cats.map(c => c.label),
