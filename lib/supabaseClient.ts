@@ -37,9 +37,15 @@ export interface CategoryBreakdown {
   count: number
 }
 
+export interface LocationBreakdown {
+  location: string
+  count: number
+}
+
 export interface HistoricalChartData {
   trendPoints: ReportTrendPoint[]
   categoryBreakdown: CategoryBreakdown[]
+  locationBreakdown: LocationBreakdown[]
   reportCount: number
 }
 
@@ -118,10 +124,10 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   const sb = getClient()
   if (!sb) return null
 
-  // Fetch all incident rows needed for both charts in one query
+  // Single query covers all three charts
   const { data: rows, error } = await sb
     .from('incidents')
-    .select('report_date, category, minutes_delay')
+    .select('report_date, category, minutes_delay, location')
     .order('report_date', { ascending: true })
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
@@ -148,10 +154,22 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
     .map(([category, count]) => ({
       category,
       count,
-      label: CATEGORY_CONFIG[category as IncidentCategory]?.label  ?? category,
-      color: CATEGORY_CONFIG[category as IncidentCategory]?.color  ?? '#4A6FA5',
+      label: CATEGORY_CONFIG[category as IncidentCategory]?.label ?? category,
+      color: CATEGORY_CONFIG[category as IncidentCategory]?.color ?? '#4A6FA5',
     }))
     .sort((a, b) => b.count - a.count)
+
+  // ── Top locations: count by location, top 12 ───────────────────────────
+  const byLoc = new Map<string, number>()
+  for (const row of rows ?? []) {
+    const loc = row.location?.trim()
+    if (!loc) continue
+    byLoc.set(loc, (byLoc.get(loc) ?? 0) + 1)
+  }
+  const locationBreakdown: LocationBreakdown[] = Array.from(byLoc.entries())
+    .map(([location, count]) => ({ location, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12)
 
   // Count distinct reports
   const { count, error: repErr } = await sb
@@ -163,6 +181,7 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   return {
     trendPoints,
     categoryBreakdown,
+    locationBreakdown,
     reportCount: count ?? 0,
   }
 }

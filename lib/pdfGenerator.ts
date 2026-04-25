@@ -660,25 +660,24 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       `${chartImages.reportCount} report${chartImages.reportCount !== 1 ? 's' : ''} in database`
     )
 
-    // Available width for charts
     const chartW = W - M * 2
 
-    // Chart 1: delay trend line — canvas was 1400×400 → ~57mm tall in PDF
-    const lineH = chartW * (400 / 1400)
-    sf('bold', 7.5); stc(C.navy)
-    tx('Total Delay Minutes per Reporting Period', M, y)
-    y += 4
-    doc.addImage(chartImages.delayTrend, 'PNG', M, y, chartW, lineH)
-    y += lineH + 8
+    // Chart 1: dual-line trend — canvas 1400×420
+    const trendH = chartW * (420 / 1400)
+    doc.addImage(chartImages.delayTrend, 'PNG', M, y, chartW, trendH)
+    y += trendH + 6
 
-    // Chart 2: category horizontal bar — canvas was 1400×500 → ~65mm tall in PDF
-    checkPage(75)
-    const barH = chartW * (500 / 1400)
-    sf('bold', 7.5); stc(C.navy)
-    tx('Incident Type Distribution (All Reporting Periods)', M, y)
-    y += 4
-    doc.addImage(chartImages.categoryBreakdown, 'PNG', M, y, chartW, barH)
-    y += barH + 8
+    // Chart 2: category horizontal bar — canvas 1400×460
+    checkPage(68)
+    const catH = chartW * (460 / 1400)
+    doc.addImage(chartImages.categoryBreakdown, 'PNG', M, y, chartW, catH)
+    y += catH + 6
+
+    // Chart 3: top locations bar — canvas 1400×460
+    checkPage(68)
+    const locH = chartW * (460 / 1400)
+    doc.addImage(chartImages.topLocations, 'PNG', M, y, chartW, locH)
+    y += locH + 8
   }
 
   // ── 8. Appendix: compact detail + chronology ──────────────────────────────
@@ -710,7 +709,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
         String(inc.cancelled || 0),
         String(inc.partCancelled || 0),
       ]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6.4, cellPadding: 1.6, lineColor: C.lightGray, lineWidth: 0.1 },
@@ -732,6 +731,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
           data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.black
         }
       },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 8
 
@@ -767,7 +767,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       startY: y + 3,
       head: [['Date', 'Time', 'CCIL', 'Co', 'Event / Entry']],
       body: eventRows.map((r) => [r[0], r[1], r[2], r[3], String(r[4]).slice(0, 220)]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6.2, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
@@ -779,9 +779,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
         3: { cellWidth: 12 },
         4: { cellWidth: 'auto' },
       },
-      didDrawPage: () => {
-        drawCompactHeader()
-      },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 6
   } else if (log.rawLogText) {
@@ -797,15 +795,13 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       startY: y,
       head: [['Raw CCIL export lines']],
       body: rawLines.map((line) => [line.replace(/\r/g, '').slice(0, 300)]),
-      margin: { left: M, right: M },
+      margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
       bodyStyles: { textColor: C.black, fontSize: 6, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1 },
       alternateRowStyles: { fillColor: [247, 248, 251] as RGB },
       columnStyles: { 0: { cellWidth: 'auto' } },
-      didDrawPage: () => {
-        drawCompactHeader()
-      },
+      didDrawPage: () => { drawCompactHeader() },
     })
     y = getAutoY() + 6
   }
