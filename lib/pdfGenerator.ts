@@ -232,20 +232,31 @@ export async function generatePDF(log: LogState): Promise<void> {
     y += HDR_H
 
     // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────
-    const textRow = (label: string, values: string[], rowH = 12, labelBg: RGB = [232, 236, 241]) => {
-      cell(M, y, labelW, rowH, labelBg)
-      const llines = doc.splitTextToSize(label, labelW - 6)
-      sf('bold', 7); stc(C.navy)
-      tx(llines.slice(0, 2), M + 3, y + (rowH > 14 ? 7 : 4.5) + 1.5)
+    const textRow = (label: string, values: string[], minH = 12, labelBg: RGB = [232, 236, 241]) => {
+      const LINE_H = 3.5  // approx mm per line at 8pt bold
 
-      for (let i = 0; i < 5; i++) {
-        const cx  = M + labelW + i * dayW
+      sf('bold', 8)
+      const splitValues = Array.from({ length: 5 }, (_, i) => {
         const val = (values[i] ?? '').trim() || 'Nil'
+        return doc.splitTextToSize(val, dayW - 3)
+      })
+      const maxLines = Math.max(...splitValues.map(l => l.length))
+      const rowH = Math.max(minH, maxLines * LINE_H + 5)
+
+      cell(M, y, labelW, rowH, labelBg)
+      sf('bold', 7); stc(C.navy)
+      const llines = doc.splitTextToSize(label, labelW - 6)
+      const labelLineH = 3.0
+      const labelStartY = y + rowH / 2 - ((llines.length - 1) * labelLineH) / 2 + 1.5
+      tx(llines, M + 3, labelStartY)
+
+      sf('bold', 8); stc(C.darkGray)
+      splitValues.forEach((lines, i) => {
+        const cx = M + labelW + i * dayW
         cell(cx, y, dayW, rowH, C.offWhite)
-        sf('bold', 8); stc(C.darkGray)
-        const lines = doc.splitTextToSize(val, dayW - 3)
-        tx(lines.slice(0, 2), cx + dayW / 2, y + rowH / 2 + 1.5, { align: 'center' })
-      }
+        const startY = y + rowH / 2 - ((lines.length - 1) * LINE_H) / 2 + 1.5
+        tx(lines, cx + dayW / 2, startY, { align: 'center' })
+      })
       y += rowH
     }
 

@@ -612,11 +612,12 @@ function FiveDaySection({ log, onChange }: {
               </td>
               {notes.risks.map((v, i) => (
                 <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
-                  <input
-                    type="text"
+                  <textarea
                     value={v}
+                    rows={1}
                     onChange={e => updateNote('risks', i, e.target.value)}
-                    className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded"
+                    className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
+                    style={{ minHeight: '1.75rem' }}
                   />
                 </td>
               ))}
@@ -650,11 +651,12 @@ function FiveDaySection({ log, onChange }: {
                 </td>
                 {notes[key].map((v, i) => (
                   <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
-                    <input
-                      type="text"
+                    <textarea
                       value={v}
+                      rows={1}
                       onChange={e => updateNote(key, i, e.target.value)}
-                      className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded"
+                      className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
+                      style={{ minHeight: '1.75rem' }}
                     />
                   </td>
                 ))}
