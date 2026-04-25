@@ -47,11 +47,51 @@ const SEV_COLOR: Record<string, RGB> = {
   INFO:     C.midGray,
 }
 
+// ─── SVG → PNG loader ─────────────────────────────────────────────────────────
+
+async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: number } | null> {
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    const svgText = await resp.text()
+
+    const svgEl = new DOMParser().parseFromString(svgText, 'image/svg+xml').documentElement
+    let svgW = parseFloat(svgEl.getAttribute('width') ?? '0')
+    let svgH = parseFloat(svgEl.getAttribute('height') ?? '0')
+    if (!svgW || !svgH) {
+      const vb = svgEl.getAttribute('viewBox')?.split(/[\s,]+/)
+      if (vb?.length === 4) { svgW = parseFloat(vb[2]); svgH = parseFloat(vb[3]) }
+    }
+    const aspect = (svgW && svgH) ? svgW / svgH : 1
+
+    const scale = 4
+    const cw = Math.round((svgW || 100) * scale)
+    const ch = Math.round((svgH || 100) * scale)
+    const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }))
+
+    return new Promise(resolve => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = cw; canvas.height = ch
+        canvas.getContext('2d')!.drawImage(img, 0, 0, cw, ch)
+        URL.revokeObjectURL(blobUrl)
+        resolve({ dataUrl: canvas.toDataURL('image/png'), aspect })
+      }
+      img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(null) }
+      img.src = blobUrl
+    })
+  } catch {
+    return null
+  }
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function generatePDF(log: LogState): Promise<void> {
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
+  const insignia    = await loadSvgAsImage('/route-insignia.svg')
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   const W = 210, H = 297, M = 14
@@ -99,6 +139,12 @@ export async function generatePDF(log: LogState): Promise<void> {
     const dateStr = log.date ? formatDisplayDate(log.date) : ''
     sf('bold', 9); stc(C.orange); tx(dateStr, W - M, 19, { align: 'right' })
     sf('normal', 7); stc(C.midGray); tx(log.period || '', W - M, 26, { align: 'right' })
+    // Route insignia — centred horizontally, vertically centred in the 52mm navy band
+    if (insignia) {
+      const imgH = 22
+      const imgW = imgH * insignia.aspect
+      doc.addImage(insignia.dataUrl, 'PNG', W / 2 - imgW / 2, (52 - imgH) / 2, imgW, imgH)
+    }
     return 70
   }
 
