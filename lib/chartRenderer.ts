@@ -1,5 +1,18 @@
 'use client'
 
+// Static imports — Chart.js must NOT be dynamic-imported in this project's
+// Next.js + webpack production build: doing so triggers a TDZ
+// ("Cannot access 'i' before initialization") because the minified barrel
+// resolves named exports before its inner module graph is initialised.
+// Static imports give the bundler a deterministic module load order.
+import {
+  Chart,
+  LineController, BarController,
+  CategoryScale, LinearScale,
+  PointElement, LineElement, BarElement,
+  Title, Tooltip, Legend, Filler,
+} from 'chart.js'
+
 import type { HistoricalChartData } from './supabaseClient'
 
 export interface ChartImages {
@@ -16,10 +29,22 @@ const CANVAS_H_BAR  = 500
 // ─── Brand colours matching pdfGenerator ─────────────────────────────────────
 const NAVY   = 'rgb(0, 31, 69)'
 const ORANGE = 'rgb(224, 82, 6)'
-const BLUE   = 'rgb(0, 51, 102)'
 const STEEL  = 'rgb(74, 111, 165)'
 const DARK   = 'rgb(44, 62, 80)'
-const LIGHT  = 'rgb(248, 249, 252)'
+
+// ─── Register Chart.js components once (idempotent guard) ────────────────────
+
+let _registered = false
+function ensureRegistered(): void {
+  if (_registered) return
+  Chart.register(
+    LineController, BarController,
+    CategoryScale, LinearScale,
+    PointElement, LineElement, BarElement,
+    Title, Tooltip, Legend, Filler,
+  )
+  _registered = true
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,33 +53,7 @@ function shortDate(iso: string): string {
   return `${parseInt(dd)} ${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mm)]}`
 }
 
-// Import Chart.js components explicitly — avoids the TDZ bug triggered by the
-// chart.js/auto barrel file in Next.js's webpack bundler.
-async function loadChart() {
-  const {
-    Chart,
-    LineController, BarController,
-    CategoryScale, LinearScale,
-    PointElement, LineElement,
-    BarElement,
-    Title, Tooltip, Legend, Filler,
-  } = await import('chart.js')
-
-  Chart.register(
-    LineController, BarController,
-    CategoryScale, LinearScale,
-    PointElement, LineElement,
-    BarElement,
-    Title, Tooltip, Legend, Filler,
-  )
-
-  return Chart
-}
-
-type ChartConstructor = Awaited<ReturnType<typeof loadChart>>
-
-async function renderChart(
-  Chart: ChartConstructor,
+function renderChart(
   canvas: HTMLCanvasElement,
   config: object
 ): Promise<string> {
@@ -89,8 +88,7 @@ export async function renderHistoricalCharts(
     throw new Error('renderHistoricalCharts must be called in a browser context')
   }
 
-  // Load Chart.js once; both renders share the same registered instance
-  const Chart = await loadChart()
+  ensureRegistered()
 
   // ── Chart 1: Delay minutes over time (line) ───────────────────────────────
   const canvas1 = document.createElement('canvas')
@@ -100,7 +98,7 @@ export async function renderHistoricalCharts(
   // Limit to most recent 30 data points to keep the chart readable
   const trend = data.trendPoints.slice(-30)
 
-  const delayTrend = await renderChart(Chart, canvas1, {
+  const delayTrend = await renderChart(canvas1, {
     type: 'line',
     data: {
       labels: trend.map(p => shortDate(p.date)),
@@ -167,7 +165,7 @@ export async function renderHistoricalCharts(
   // Show all categories that appear in the data (already sorted desc by count)
   const cats = data.categoryBreakdown
 
-  const categoryBreakdown = await renderChart(Chart, canvas2, {
+  const categoryBreakdown = await renderChart(canvas2, {
     type: 'bar',
     data: {
       labels: cats.map(c => c.label),
