@@ -180,6 +180,8 @@ export async function upsertReportData(log: LogState): Promise<void> {
       // ── Extended Insight fields ──────────────────────────────────────────
       incident_type_code:  inc.incidentTypeCode  ?? null,
       incident_type_label: inc.incidentTypeLabel ?? null,
+      display_group:       inc.displayGroup      ?? null,
+      equipment:           inc.equipment         ?? null,
       line:                inc.line              ?? null,
       fault_number:        inc.faultNo           ?? null,
       possession_ref:      inc.possessionRef     ?? null,
@@ -321,4 +323,28 @@ export async function fetchHistoricalData(
     reportCount: count ?? 0,
     windowDays,
   }
+}
+
+// ─── App settings (global) ────────────────────────────────────────────────────
+
+const APP_SETTINGS_KEY = 'category-settings'
+
+export async function saveAppSettings(data: unknown): Promise<void> {
+  const sb = getClient()
+  if (!sb) return
+  await sb
+    .from('app_settings')
+    .upsert({ key: APP_SETTINGS_KEY, value: data, updated_at: new Date().toISOString() })
+}
+
+export async function loadAppSettings(): Promise<unknown | null> {
+  const sb = getClient()
+  if (!sb) return null
+  const { data, error } = await sb
+    .from('app_settings')
+    .select('value')
+    .eq('key', APP_SETTINGS_KEY)
+    .maybeSingle()
+  if (error) return null
+  return data?.value ?? null
 }
