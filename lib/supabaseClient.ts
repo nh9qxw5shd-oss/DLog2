@@ -180,6 +180,8 @@ export async function upsertReportData(log: LogState): Promise<void> {
       // ── Extended Insight fields ──────────────────────────────────────────
       incident_type_code:  inc.incidentTypeCode  ?? null,
       incident_type_label: inc.incidentTypeLabel ?? null,
+      display_group:       inc.displayGroup      ?? null,
+      equipment:           inc.equipment         ?? null,
       line:                inc.line              ?? null,
       fault_number:        inc.faultNo           ?? null,
       possession_ref:      inc.possessionRef     ?? null,
