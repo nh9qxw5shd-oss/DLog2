@@ -17,7 +17,7 @@ import {
 } from '@/lib/types'
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
-import { isSupabaseConfigured, upsertReportData, fetchHistoricalData } from '@/lib/supabaseClient'
+import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations } from '@/lib/supabaseClient'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 
@@ -986,6 +986,16 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
   const [addingManual, setAddingManual] = useState(false)
   const [newInc, setNewInc]           = useState<Partial<Incident>>({ category: 'GENERAL', severity: 'LOW', isHighlight: false })
 
+  // On mount, query DB for prior occurrences of any CCIL in this log so that
+  // carried-over incidents are flagged before the user reviews or exports.
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return
+    annotateWithContinuations(log).then(annotated => {
+      onUpdate(annotated.incidents)
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const cats = ['ALL', 'HIGHLIGHTS', ...Array.from(new Set(log.incidents.map(i => i.category)))]
 
   const filtered = filter === 'ALL'        ? log.incidents
@@ -1166,12 +1176,18 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
     setGenerating(true); setError(''); setStatusMsg('')
 
     let chartImages: ChartImages | undefined
+    // Use a local annotated copy so the PDF always reflects carryover status
+    // even if the ReviewStep annotation hasn't propagated yet.
+    let pdfLog = log
 
     try {
       if (isSupabaseConfigured()) {
-        // 1. Push this report's data to Supabase (upsert = de-dupe by date)
+        // 1. Annotate continuations, then push to Supabase
+        setStatusMsg('Checking for carried-over incidents…')
+        pdfLog = await annotateWithContinuations(log)
+
         setStatusMsg('Syncing with database…')
-        await upsertReportData(log)
+        await upsertReportData(pdfLog)
 
         // 2. Fetch all historical data for chart rendering
         setStatusMsg('Fetching historical trends…')
@@ -1187,7 +1203,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
 
       // 4. Build and download PDF (with charts if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(log, chartImages)
+      await generatePDF(pdfLog, chartImages)
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')

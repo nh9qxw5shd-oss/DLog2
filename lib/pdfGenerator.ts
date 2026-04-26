@@ -511,9 +511,11 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       sf('normal', 7.2); stc(C.darkGray)
       const locStr = [inc.incidentStart, inc.location].filter(Boolean).join('  ·  ')
       tx(locStr, M + 26, y + 6.5)
+      // Carryover label sits below the badge row, left-aligned so it doesn't
+      // clash with the category badge or the delay figure on the right.
       if (inc.isContinuation) {
-        sf('bold', 6); stc(C.amber)
-        tx('CARRIED OVER FROM PRIOR LOG', W - M - 4, y + 6.5, { align: 'right' })
+        sf('bold', 5.5); stc(C.amber)
+        tx('CARRIED OVER FROM PRIOR LOG', M + 5, y + 11)
       }
 
       // Title

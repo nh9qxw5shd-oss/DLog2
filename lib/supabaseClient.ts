@@ -59,6 +59,45 @@ export interface HistoricalChartData {
   windowDays: number
 }
 
+// ─── Carryover annotation ─────────────────────────────────────────────────────
+// Queries the DB for any prior occurrence of each CCIL reference and marks
+// matching incidents as continuations with an incremental delay delta.
+// Returns a new LogState with annotated incidents; safe to call before save.
+
+export async function annotateWithContinuations(log: LogState): Promise<LogState> {
+  const sb = getClient()
+  if (!sb || !log.date) return log
+
+  const ccilRefs = log.incidents.map(i => i.ccil).filter((c): c is string => !!c)
+  const priorByccil = new Map<string, number>()
+
+  if (ccilRefs.length > 0) {
+    const { data: priorRows } = await sb
+      .from('incidents')
+      .select('ccil, minutes_delay, report_date')
+      .in('ccil', ccilRefs)
+      .lt('report_date', log.date)
+      .order('report_date', { ascending: false })
+
+    for (const row of priorRows ?? []) {
+      if (row.ccil && !priorByccil.has(row.ccil)) {
+        priorByccil.set(row.ccil, row.minutes_delay ?? 0)
+      }
+    }
+  }
+
+  const incidents = log.incidents.map(inc => {
+    if (inc.ccil && priorByccil.has(inc.ccil)) {
+      const prevDelay = priorByccil.get(inc.ccil)!
+      const delta = Math.max(0, (inc.minutesDelay ?? 0) - prevDelay)
+      return { ...inc, isContinuation: true, delayDelta: delta }
+    }
+    return { ...inc, isContinuation: false, delayDelta: undefined }
+  })
+
+  return { ...log, incidents }
+}
+
 // ─── Upsert ───────────────────────────────────────────────────────────────────
 // De-duplication: upsert on report_date (unique constraint).
 // Existing incidents for the report are deleted and re-inserted so a re-run
@@ -73,37 +112,8 @@ export async function upsertReportData(log: LogState): Promise<void> {
   const sb = getClient()
   if (!sb || !log.date) return
 
-  // ── Cross-date CCIL lookup ─────────────────────────────────────────────────
-  // For every CCIL reference in this log, find the most recent prior occurrence
-  // (report_date strictly before today's log) so we can compute deltas.
-  const ccilRefs = log.incidents.map(i => i.ccil).filter((c): c is string => !!c)
-  const priorByccil = new Map<string, number>() // ccil → most recent minutes_delay
-
-  if (ccilRefs.length > 0) {
-    const { data: priorRows } = await sb
-      .from('incidents')
-      .select('ccil, minutes_delay, report_date')
-      .in('ccil', ccilRefs)
-      .lt('report_date', log.date)
-      .order('report_date', { ascending: false })
-
-    for (const row of priorRows ?? []) {
-      // Only keep the most recent occurrence per CCIL (rows are desc by date)
-      if (row.ccil && !priorByccil.has(row.ccil)) {
-        priorByccil.set(row.ccil, row.minutes_delay ?? 0)
-      }
-    }
-  }
-
-  // Annotate incidents with continuation status and delta delay
-  const annotated = log.incidents.map(inc => {
-    if (inc.ccil && priorByccil.has(inc.ccil)) {
-      const prevDelay = priorByccil.get(inc.ccil)!
-      const delta = Math.max(0, (inc.minutesDelay ?? 0) - prevDelay)
-      return { ...inc, isContinuation: true, delayDelta: delta }
-    }
-    return { ...inc, isContinuation: false, delayDelta: undefined }
-  })
+  const annotatedLog = await annotateWithContinuations(log)
+  const annotated = annotatedLog.incidents
 
   // Totals use delta delay for continuations, raw delay for first-seen incidents
   const totalDelay = annotated.reduce((s, i) =>
@@ -240,6 +250,8 @@ export async function fetchHistoricalData(
 
   // ── Delay trend: aggregate by report_date ───────────────────────────────
   // Use delay_delta for continuations so multi-day incidents don't double-count.
+  // Exclude continuations from incidentCount so the count and average-delay-per-
+  // incident charts reflect new incidents only, not repeated carry-overs.
   const byDate = new Map<string, { totalDelay: number; incidentCount: number }>()
   for (const row of rows ?? []) {
     const agg = byDate.get(row.report_date) ?? { totalDelay: 0, incidentCount: 0 }
@@ -248,7 +260,7 @@ export async function fetchHistoricalData(
       : (row.minutes_delay ?? 0)
     byDate.set(row.report_date, {
       totalDelay:    agg.totalDelay    + delayContrib,
-      incidentCount: agg.incidentCount + 1,
+      incidentCount: agg.incidentCount + (row.is_continuation ? 0 : 1),
     })
   }
   const trendPoints: ReportTrendPoint[] = Array.from(byDate.entries()).map(
