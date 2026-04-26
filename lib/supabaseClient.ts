@@ -60,14 +60,53 @@ export interface HistoricalChartData {
 // De-duplication: upsert on report_date (unique constraint).
 // Existing incidents for the report are deleted and re-inserted so a re-run
 // of the same date always reflects the latest reviewed data.
+//
+// Cross-log continuation: any CCIL reference that already appears in a prior
+// report is flagged as a continuation. Its event-type count is suppressed and
+// only the incremental delay (delta) is recorded, so multi-day incidents don't
+// inflate totals.
 
 export async function upsertReportData(log: LogState): Promise<void> {
   const sb = getClient()
   if (!sb || !log.date) return
 
-  const totalDelay        = log.incidents.reduce((s, i) => s + (i.minutesDelay   || 0), 0)
-  const totalCancelled    = log.incidents.reduce((s, i) => s + (i.cancelled      || 0), 0)
-  const totalPartCancelled= log.incidents.reduce((s, i) => s + (i.partCancelled  || 0), 0)
+  // ── Cross-date CCIL lookup ─────────────────────────────────────────────────
+  // For every CCIL reference in this log, find the most recent prior occurrence
+  // (report_date strictly before today's log) so we can compute deltas.
+  const ccilRefs = log.incidents.map(i => i.ccil).filter((c): c is string => !!c)
+  const priorByccil = new Map<string, number>() // ccil → most recent minutes_delay
+
+  if (ccilRefs.length > 0) {
+    const { data: priorRows } = await sb
+      .from('incidents')
+      .select('ccil, minutes_delay, report_date')
+      .in('ccil', ccilRefs)
+      .lt('report_date', log.date)
+      .order('report_date', { ascending: false })
+
+    for (const row of priorRows ?? []) {
+      // Only keep the most recent occurrence per CCIL (rows are desc by date)
+      if (row.ccil && !priorByccil.has(row.ccil)) {
+        priorByccil.set(row.ccil, row.minutes_delay ?? 0)
+      }
+    }
+  }
+
+  // Annotate incidents with continuation status and delta delay
+  const annotated = log.incidents.map(inc => {
+    if (inc.ccil && priorByccil.has(inc.ccil)) {
+      const prevDelay = priorByccil.get(inc.ccil)!
+      const delta = Math.max(0, (inc.minutesDelay ?? 0) - prevDelay)
+      return { ...inc, isContinuation: true, delayDelta: delta }
+    }
+    return { ...inc, isContinuation: false, delayDelta: undefined }
+  })
+
+  // Totals use delta delay for continuations, raw delay for first-seen incidents
+  const totalDelay = annotated.reduce((s, i) =>
+    s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay ?? 0)), 0)
+  const totalCancelled     = annotated.reduce((s, i) => s + (i.cancelled     || 0), 0)
+  const totalPartCancelled = annotated.reduce((s, i) => s + (i.partCancelled || 0), 0)
 
   // Upsert report row (conflict on report_date → update in place)
   const { data: reportRow, error: reportErr } = await sb
@@ -102,23 +141,25 @@ export async function upsertReportData(log: LogState): Promise<void> {
 
   if (delErr) throw new Error(`Incident clear failed: ${delErr.message}`)
 
-  if (log.incidents.length === 0) return
+  if (annotated.length === 0) return
 
-  const rows = log.incidents.map(inc => ({
-    report_id:      reportId,
-    report_date:    log.date,
-    ccil:           inc.ccil          || null,
-    category:       inc.category,
-    severity:       inc.severity,
-    title:          inc.title,
-    location:       inc.location      || null,
-    area:           inc.area          || null,
-    incident_start: inc.incidentStart || null,
-    minutes_delay:  inc.minutesDelay  ?? 0,
-    trains_delayed: inc.trainsDelayed ?? 0,
-    cancelled:      inc.cancelled     ?? 0,
-    part_cancelled: inc.partCancelled ?? 0,
-    is_highlight:   inc.isHighlight,
+  const rows = annotated.map(inc => ({
+    report_id:       reportId,
+    report_date:     log.date,
+    ccil:            inc.ccil          || null,
+    category:        inc.category,
+    severity:        inc.severity,
+    title:           inc.title,
+    location:        inc.location      || null,
+    area:            inc.area          || null,
+    incident_start:  inc.incidentStart || null,
+    minutes_delay:   inc.minutesDelay  ?? 0,
+    trains_delayed:  inc.trainsDelayed ?? 0,
+    cancelled:       inc.cancelled     ?? 0,
+    part_cancelled:  inc.partCancelled ?? 0,
+    is_highlight:    inc.isHighlight,
+    is_continuation: inc.isContinuation ?? false,
+    delay_delta:     inc.delayDelta    ?? null,
   }))
 
   const { error: insErr } = await sb.from('incidents').insert(rows)
@@ -131,20 +172,24 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   const sb = getClient()
   if (!sb) return null
 
-  // Single query covers all charts
+  // Single query covers all charts; include continuation flags for correct accounting
   const { data: rows, error } = await sb
     .from('incidents')
-    .select('report_date, category, minutes_delay, location, incident_start')
+    .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
     .order('report_date', { ascending: true })
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
 
   // ── Delay trend: aggregate by report_date ───────────────────────────────
+  // Use delay_delta for continuations so multi-day incidents don't double-count.
   const byDate = new Map<string, { totalDelay: number; incidentCount: number }>()
   for (const row of rows ?? []) {
     const agg = byDate.get(row.report_date) ?? { totalDelay: 0, incidentCount: 0 }
+    const delayContrib = row.is_continuation
+      ? (row.delay_delta ?? 0)
+      : (row.minutes_delay ?? 0)
     byDate.set(row.report_date, {
-      totalDelay:    agg.totalDelay    + (row.minutes_delay ?? 0),
+      totalDelay:    agg.totalDelay    + delayContrib,
       incidentCount: agg.incidentCount + 1,
     })
   }
@@ -153,8 +198,10 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   )
 
   // ── Category split: count by category across all time ──────────────────
+  // Continuations are the same event seen again — exclude from tallies.
   const byCat = new Map<string, number>()
   for (const row of rows ?? []) {
+    if (row.is_continuation) continue
     byCat.set(row.category, (byCat.get(row.category) ?? 0) + 1)
   }
   const categoryBreakdown: CategoryBreakdown[] = Array.from(byCat.entries())
@@ -169,6 +216,7 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   // ── Top locations: count by location, top 12 ───────────────────────────
   const byLoc = new Map<string, number>()
   for (const row of rows ?? []) {
+    if (row.is_continuation) continue
     const loc = row.location?.trim()
     if (!loc) continue
     byLoc.set(loc, (byLoc.get(loc) ?? 0) + 1)
@@ -181,6 +229,7 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   // ── Time-of-day distribution (24-hour breakdown) ──────────────────────
   const byHour = new Array(24).fill(0) as number[]
   for (const row of rows ?? []) {
+    if (row.is_continuation) continue
     if (!row.incident_start) continue
     const hour = parseInt((row.incident_start as string).split(':')[0] ?? '-1', 10)
     if (hour >= 0 && hour < 24) byHour[hour]++
@@ -190,6 +239,7 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
   const SAFETY_KEYS = new Set(['SPAD','TPWS','NEAR_MISS','BRIDGE_STRIKE','PERSON_STRUCK','FATALITY'])
   const safetyByDate = new Map<string, Record<string, number>>()
   for (const row of rows ?? []) {
+    if (row.is_continuation) continue
     if (!SAFETY_KEYS.has(row.category)) continue
     if (!safetyByDate.has(row.report_date)) safetyByDate.set(row.report_date, {})
     const m = safetyByDate.get(row.report_date)!

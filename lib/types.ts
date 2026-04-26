@@ -165,6 +165,8 @@ export interface Incident {
   actionCode?: string
   isHighlight: boolean
   rawText?: string
+  isContinuation?: boolean  // true when this CCIL appeared in a prior report
+  delayDelta?: number       // additional delay since previous occurrence (continuations only)
 }
 
 export interface IncidentEvent {

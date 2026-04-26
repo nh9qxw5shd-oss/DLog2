@@ -404,15 +404,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
   // ── Safety infographic stats bar ──────────────────────────────────────────
 
   const drawSafetyStats = (incidents: Incident[]) => {
+    const first = incidents.filter(i => !i.isContinuation)
     const stats = [
-      { label: 'Person Struck', count: incidents.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length, urgent: true  },
-      { label: 'SPADs',         count: incidents.filter(i => i.category === 'SPAD').length,              urgent: true  },
-      { label: 'TPWS',          count: incidents.filter(i => i.category === 'TPWS').length,              urgent: false },
-      { label: 'Near Misses',   count: incidents.filter(i => i.category === 'NEAR_MISS').length,        urgent: false },
-      { label: 'Bridge Strikes',count: incidents.filter(i => i.category === 'BRIDGE_STRIKE').length,    urgent: true  },
-      { label: 'Fires',         count: incidents.filter(i => i.category === 'FIRE').length,              urgent: true  },
-      { label: 'Crime/Trespass',count: incidents.filter(i => i.category === 'CRIME').length,            urgent: false },
-      { label: 'Irr. Working',  count: incidents.filter(i => i.category === 'IRREGULAR_WORKING').length,urgent: false },
+      { label: 'Person Struck', count: first.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length, urgent: true  },
+      { label: 'SPADs',         count: first.filter(i => i.category === 'SPAD').length,              urgent: true  },
+      { label: 'TPWS',          count: first.filter(i => i.category === 'TPWS').length,              urgent: false },
+      { label: 'Near Misses',   count: first.filter(i => i.category === 'NEAR_MISS').length,        urgent: false },
+      { label: 'Bridge Strikes',count: first.filter(i => i.category === 'BRIDGE_STRIKE').length,    urgent: true  },
+      { label: 'Fires',         count: first.filter(i => i.category === 'FIRE').length,              urgent: true  },
+      { label: 'Crime/Trespass',count: first.filter(i => i.category === 'CRIME').length,            urgent: false },
+      { label: 'Irr. Working',  count: first.filter(i => i.category === 'IRREGULAR_WORKING').length,urgent: false },
     ]
     const boxW = (W - M*2) / stats.length
     stats.forEach((s, i) => {
@@ -431,7 +432,8 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
   // ── Disruption summary bar ────────────────────────────────────────────────
 
   const drawDisruptionSummary = (incidents: Incident[]) => {
-    const totalMins = incidents.reduce((s, i) => s + (i.minutesDelay || 0), 0)
+    const totalMins = incidents.reduce((s, i) =>
+      s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0)
     const totalCan  = incidents.reduce((s, i) => s + (i.cancelled    || 0), 0)
     const totalPCan = incidents.reduce((s, i) => s + (i.partCancelled|| 0), 0)
     const topInc    = [...incidents].sort((a,b) => (b.minutesDelay||0) - (a.minutesDelay||0))[0]
@@ -511,6 +513,10 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       sf('normal', 7.2); stc(C.darkGray)
       const locStr = [inc.incidentStart, inc.location].filter(Boolean).join('  ·  ')
       tx(locStr, M + 26, y + 6.5)
+      if (inc.isContinuation) {
+        sf('bold', 6); stc(C.amber)
+        tx('CARRIED OVER FROM PRIOR LOG', W - M - 4, y + 6.5, { align: 'right' })
+      }
 
       // Title
       sf('bold', 10.5); stc(C.blue)
@@ -528,7 +534,13 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       // Disruption figures right side
       if ((inc.minutesDelay || 0) > 0 || (inc.cancelled || 0) > 0) {
         sf('bold', 10); stc(sevColor)
-        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        if (inc.isContinuation) {
+          const delta = inc.delayDelta ?? 0
+          if (delta > 0) tx(`+${delta.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+          else if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        } else if (inc.minutesDelay) {
+          tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        }
         sf('normal', 7.2); stc(C.darkGray)
         if (inc.cancelled)     tx(`Can: ${inc.cancelled}`, W - M - 4, y + 20, { align: 'right' })
         if (inc.partCancelled) tx(`Part-can: ${inc.partCancelled}`, W - M - 4, y + 25, { align: 'right' })
@@ -566,15 +578,28 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
     checkPage(22)
     sectionHead(sec.label, `${items.length} incident${items.length !== 1 ? 's' : ''}`)
 
-    const tableBody = items.map(i => [
-      i.ccil || '—',
-      i.location || '—',
-      i.incidentStart || '—',
-      i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title,
-      (i.minutesDelay || 0) > 0 ? i.minutesDelay!.toLocaleString() : '—',
-      (i.cancelled    || 0) > 0 ? String(i.cancelled) : '—',
-      i.severity,
-    ])
+    const tableBody = items.map(i => {
+      let delayCell = '—'
+      if (i.isContinuation) {
+        const delta = i.delayDelta ?? 0
+        delayCell = delta > 0
+          ? `+${delta.toLocaleString()} (c/o)`
+          : (i.minutesDelay || 0) > 0 ? `${i.minutesDelay!.toLocaleString()} (c/o)` : '— (c/o)'
+      } else if ((i.minutesDelay || 0) > 0) {
+        delayCell = i.minutesDelay!.toLocaleString()
+      }
+      return [
+        i.ccil || '—',
+        i.location || '—',
+        i.incidentStart || '—',
+        i.isContinuation
+          ? (i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`)
+          : (i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title),
+        delayCell,
+        (i.cancelled || 0) > 0 ? String(i.cancelled) : '—',
+        i.severity,
+      ]
+    })
 
     autoTable(doc, {
       startY: y,
