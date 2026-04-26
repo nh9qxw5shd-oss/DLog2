@@ -250,6 +250,8 @@ export async function fetchHistoricalData(
 
   // ── Delay trend: aggregate by report_date ───────────────────────────────
   // Use delay_delta for continuations so multi-day incidents don't double-count.
+  // Exclude continuations from incidentCount so the count and average-delay-per-
+  // incident charts reflect new incidents only, not repeated carry-overs.
   const byDate = new Map<string, { totalDelay: number; incidentCount: number }>()
   for (const row of rows ?? []) {
     const agg = byDate.get(row.report_date) ?? { totalDelay: 0, incidentCount: 0 }
@@ -258,7 +260,7 @@ export async function fetchHistoricalData(
       : (row.minutes_delay ?? 0)
     byDate.set(row.report_date, {
       totalDelay:    agg.totalDelay    + delayContrib,
-      incidentCount: agg.incidentCount + 1,
+      incidentCount: agg.incidentCount + (row.is_continuation ? 0 : 1),
     })
   }
   const trendPoints: ReportTrendPoint[] = Array.from(byDate.entries()).map(
