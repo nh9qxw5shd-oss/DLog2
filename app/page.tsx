@@ -927,6 +927,11 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
               {incident.location && <span className="text-xs text-[#7A8BA8] font-mono">{incident.location}</span>}
               {incident.ccil     && <span className="text-xs text-[#4A5A72] font-mono">CCIL {incident.ccil}</span>}
               {incident.incidentStart && <span className="text-xs text-[#4A5A72] font-mono">{incident.incidentStart}</span>}
+              {incident.isContinuation && (
+                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[rgba(243,156,18,0.12)] border border-[rgba(243,156,18,0.3)] text-[#F39C12]">
+                  carried over from prior log
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -940,8 +945,17 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
       <div className="flex items-center justify-between pt-1 pl-5">
         <div className="flex items-center gap-3 text-xs font-mono">
           <span style={{ color: cat.color }}>{cat.shortLabel}</span>
-          {(incident.minutesDelay || 0) > 0 && <span className="text-[#4A5A72]">{incident.minutesDelay!.toLocaleString()} min delay</span>}
-          {(incident.cancelled    || 0) > 0 && <span className="text-[#4A5A72]">{incident.cancelled} cancelled</span>}
+          {incident.isContinuation
+            ? (incident.delayDelta ?? 0) > 0
+              ? <span className="text-[#F39C12]">+{(incident.delayDelta!).toLocaleString()} min additional delay</span>
+              : (incident.minutesDelay || 0) > 0
+                ? <span className="text-[#4A5A72]">{incident.minutesDelay!.toLocaleString()} min (no change)</span>
+                : null
+            : (incident.minutesDelay || 0) > 0
+              ? <span className="text-[#4A5A72]">{incident.minutesDelay!.toLocaleString()} min delay</span>
+              : null
+          }
+          {(incident.cancelled || 0) > 0 && <span className="text-[#4A5A72]">{incident.cancelled} cancelled</span>}
         </div>
         <div className="flex items-center gap-1">
           <button onClick={startEdit} title="Edit incident"

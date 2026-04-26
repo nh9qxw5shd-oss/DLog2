@@ -513,6 +513,10 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       sf('normal', 7.2); stc(C.darkGray)
       const locStr = [inc.incidentStart, inc.location].filter(Boolean).join('  ·  ')
       tx(locStr, M + 26, y + 6.5)
+      if (inc.isContinuation) {
+        sf('bold', 6); stc(C.amber)
+        tx('CARRIED OVER FROM PRIOR LOG', W - M - 4, y + 6.5, { align: 'right' })
+      }
 
       // Title
       sf('bold', 10.5); stc(C.blue)
@@ -530,7 +534,13 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       // Disruption figures right side
       if ((inc.minutesDelay || 0) > 0 || (inc.cancelled || 0) > 0) {
         sf('bold', 10); stc(sevColor)
-        if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        if (inc.isContinuation) {
+          const delta = inc.delayDelta ?? 0
+          if (delta > 0) tx(`+${delta.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+          else if (inc.minutesDelay) tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        } else if (inc.minutesDelay) {
+          tx(`${inc.minutesDelay.toLocaleString()} min`, W - M - 4, y + 13.5, { align: 'right' })
+        }
         sf('normal', 7.2); stc(C.darkGray)
         if (inc.cancelled)     tx(`Can: ${inc.cancelled}`, W - M - 4, y + 20, { align: 'right' })
         if (inc.partCancelled) tx(`Part-can: ${inc.partCancelled}`, W - M - 4, y + 25, { align: 'right' })
@@ -568,15 +578,28 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
     checkPage(22)
     sectionHead(sec.label, `${items.length} incident${items.length !== 1 ? 's' : ''}`)
 
-    const tableBody = items.map(i => [
-      i.ccil || '—',
-      i.location || '—',
-      i.incidentStart || '—',
-      i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title,
-      (i.minutesDelay || 0) > 0 ? i.minutesDelay!.toLocaleString() : '—',
-      (i.cancelled    || 0) > 0 ? String(i.cancelled) : '—',
-      i.severity,
-    ])
+    const tableBody = items.map(i => {
+      let delayCell = '—'
+      if (i.isContinuation) {
+        const delta = i.delayDelta ?? 0
+        delayCell = delta > 0
+          ? `+${delta.toLocaleString()} (c/o)`
+          : (i.minutesDelay || 0) > 0 ? `${i.minutesDelay!.toLocaleString()} (c/o)` : '— (c/o)'
+      } else if ((i.minutesDelay || 0) > 0) {
+        delayCell = i.minutesDelay!.toLocaleString()
+      }
+      return [
+        i.ccil || '—',
+        i.location || '—',
+        i.incidentStart || '—',
+        i.isContinuation
+          ? (i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`)
+          : (i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title),
+        delayCell,
+        (i.cancelled || 0) > 0 ? String(i.cancelled) : '—',
+        i.severity,
+      ]
+    })
 
     autoTable(doc, {
       startY: y,
