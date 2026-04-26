@@ -404,15 +404,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
   // ── Safety infographic stats bar ──────────────────────────────────────────
 
   const drawSafetyStats = (incidents: Incident[]) => {
+    const first = incidents.filter(i => !i.isContinuation)
     const stats = [
-      { label: 'Person Struck', count: incidents.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length, urgent: true  },
-      { label: 'SPADs',         count: incidents.filter(i => i.category === 'SPAD').length,              urgent: true  },
-      { label: 'TPWS',          count: incidents.filter(i => i.category === 'TPWS').length,              urgent: false },
-      { label: 'Near Misses',   count: incidents.filter(i => i.category === 'NEAR_MISS').length,        urgent: false },
-      { label: 'Bridge Strikes',count: incidents.filter(i => i.category === 'BRIDGE_STRIKE').length,    urgent: true  },
-      { label: 'Fires',         count: incidents.filter(i => i.category === 'FIRE').length,              urgent: true  },
-      { label: 'Crime/Trespass',count: incidents.filter(i => i.category === 'CRIME').length,            urgent: false },
-      { label: 'Irr. Working',  count: incidents.filter(i => i.category === 'IRREGULAR_WORKING').length,urgent: false },
+      { label: 'Person Struck', count: first.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length, urgent: true  },
+      { label: 'SPADs',         count: first.filter(i => i.category === 'SPAD').length,              urgent: true  },
+      { label: 'TPWS',          count: first.filter(i => i.category === 'TPWS').length,              urgent: false },
+      { label: 'Near Misses',   count: first.filter(i => i.category === 'NEAR_MISS').length,        urgent: false },
+      { label: 'Bridge Strikes',count: first.filter(i => i.category === 'BRIDGE_STRIKE').length,    urgent: true  },
+      { label: 'Fires',         count: first.filter(i => i.category === 'FIRE').length,              urgent: true  },
+      { label: 'Crime/Trespass',count: first.filter(i => i.category === 'CRIME').length,            urgent: false },
+      { label: 'Irr. Working',  count: first.filter(i => i.category === 'IRREGULAR_WORKING').length,urgent: false },
     ]
     const boxW = (W - M*2) / stats.length
     stats.forEach((s, i) => {
@@ -431,7 +432,8 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
   // ── Disruption summary bar ────────────────────────────────────────────────
 
   const drawDisruptionSummary = (incidents: Incident[]) => {
-    const totalMins = incidents.reduce((s, i) => s + (i.minutesDelay || 0), 0)
+    const totalMins = incidents.reduce((s, i) =>
+      s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0)
     const totalCan  = incidents.reduce((s, i) => s + (i.cancelled    || 0), 0)
     const totalPCan = incidents.reduce((s, i) => s + (i.partCancelled|| 0), 0)
     const topInc    = [...incidents].sort((a,b) => (b.minutesDelay||0) - (a.minutesDelay||0))[0]

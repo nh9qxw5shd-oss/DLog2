@@ -978,10 +978,11 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
     : log.incidents.filter(i => i.category === filter)
 
   const stats = {
-    total:      log.incidents.length,
-    highlights: log.incidents.filter(i => i.isHighlight).length,
-    critical:   log.incidents.filter(i => ['CRITICAL','HIGH'].includes(i.severity)).length,
-    totalMins:  log.incidents.reduce((s, i) => s + (i.minutesDelay || 0), 0),
+    total:      log.incidents.filter(i => !i.isContinuation).length,
+    highlights: log.incidents.filter(i => i.isHighlight && !i.isContinuation).length,
+    critical:   log.incidents.filter(i => ['CRITICAL','HIGH'].includes(i.severity) && !i.isContinuation).length,
+    totalMins:  log.incidents.reduce((s, i) =>
+      s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0),
     totalCan:   log.incidents.reduce((s, i) => s + (i.cancelled    || 0), 0),
   }
 
@@ -1036,9 +1037,9 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
       {/* Category filter tabs */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {cats.map(cat => {
-          const count = cat === 'ALL'        ? log.incidents.length
+          const count = cat === 'ALL'        ? stats.total
             : cat === 'HIGHLIGHTS'           ? stats.highlights
-            : log.incidents.filter(i => i.category === cat).length
+            : log.incidents.filter(i => i.category === cat && !i.isContinuation).length
           const cfg = CATEGORY_CONFIG[cat as IncidentCategory]
           return (
             <button key={cat} onClick={() => setFilter(cat)}
