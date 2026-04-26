@@ -150,6 +150,48 @@ function classifyByTypeCode(typeField: string): IncidentCategory | null {
   return null
 }
 
+// ─── Timing helpers ───────────────────────────────────────────────────────────
+
+/** "1500" or "15:00" → minutes since midnight, or null on failure. */
+function timeToMinutes(t: string | undefined): number | null {
+  if (!t) return null
+  const m = t.replace(/[^\d:]/g, '')
+  if (!m) return null
+  const colon = m.indexOf(':')
+  let hh: number, mm: number
+  if (colon >= 0) {
+    hh = parseInt(m.slice(0, colon), 10)
+    mm = parseInt(m.slice(colon + 1), 10)
+  } else if (m.length === 4) {
+    hh = parseInt(m.slice(0, 2), 10)
+    mm = parseInt(m.slice(2, 4), 10)
+  } else {
+    return null
+  }
+  if (isNaN(hh) || isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+  return hh * 60 + mm
+}
+
+/** Minutes between two HH:MM / HHMM strings, with overnight rollover. */
+function diffMinutes(start: string | undefined, end: string | undefined): number | null {
+  const s = timeToMinutes(start)
+  const e = timeToMinutes(end)
+  if (s === null || e === null) return null
+  let d = e - s
+  if (d < 0) d += 24 * 60
+  return d > 24 * 60 ? null : Math.max(0, d)
+}
+
+/** Normalise "1500" → "15:00". Returns empty string when unparseable. */
+function fmtHHMM(raw: string | undefined): string {
+  if (!raw) return ''
+  const cleaned = raw.replace(/[^\d:]/g, '')
+  if (!cleaned) return ''
+  if (cleaned.includes(':')) return cleaned.slice(0, 5)
+  if (cleaned.length === 4) return `${cleaned.slice(0, 2)}:${cleaned.slice(2, 4)}`
+  return ''
+}
+
 // ─── Block parser ─────────────────────────────────────────────────────────────
 
 function parseIncidentBlock(
@@ -173,6 +215,27 @@ function parseIncidentBlock(
   const events: IncidentEvent[] = []
   let inEvents = false
   let eventHeaderSeen = false
+
+  // ── Extended capture fields ────────────────────────────────────────────────
+  let routeLine      = ''   // railway line direction e.g. "Down Fast"
+  let possessionRef  = ''
+  let thirdPartyRef  = ''
+  let advisedTime    = ''
+  let initialResp    = ''
+  let arrivedAt      = ''
+  let nwrTime        = ''
+  let ftsDivCount    = 0
+  let tdaRef         = ''
+  let trmcCode       = ''
+  let hasFiles       = false
+  let trainId        = ''
+  let trainCompany   = ''
+  let trainOrigin    = ''
+  let trainDestination = ''
+  const unitNumbers: string[] = []
+  let typeRowSeen    = false
+  let inTrainBlock   = false
+  let trainHeaderSeen = false
 
   for (let i = 1; i < lines.length; i++) {
     const raw = lines[i]
@@ -207,6 +270,16 @@ function parseIncidentBlock(
       const cells = cellValues(line)
       incidentType = cells[0] || ''
       faultNo = cells[3] || ''
+      typeRowSeen = true
+      continue
+    }
+
+    // Line direction + possession ref row (immediately follows the type/fault row):
+    // |  | Down Fast | **Possession Ref:** |  |
+    if (typeRowSeen && !routeLine && cells.length >= 2 && line.toLowerCase().includes('possession ref')) {
+      const candidate = cells[1]?.trim() || ''
+      if (candidate && !/^possession ref/i.test(candidate)) routeLine = candidate
+      possessionRef = cells[3] || ''
       continue
     }
 
@@ -219,12 +292,17 @@ function parseIncidentBlock(
       continue
     }
 
-    // Incident Start header row
+    // Incident Start header row — values are on the next line
+    // | Incident Start | Advised | Paged | Initial Resp | Arrived At | Trains Susp | OTM | NWR | Booked In Order |
     if (line.includes('Incident Start') && line.includes('Advised')) {
       const nextLine = lines[i + 1]?.trim() || ''
       if (nextLine.startsWith('|')) {
         const cells = cellValues(nextLine)
         incidentStart = cells[0] || ''
+        advisedTime   = cells[1] || ''
+        initialResp   = cells[3] || ''
+        arrivedAt     = cells[4] || ''
+        nwrTime       = cells[7] || ''
       }
       continue
     }
@@ -234,12 +312,16 @@ function parseIncidentBlock(
       const nextLine = lines[i + 1]?.trim() || ''
       if (nextLine.startsWith('|') && !nextLine.includes('**')) {
         const cells = cellValues(nextLine)
-        // | TDA | TRMC | Can | Pt Can | blank | Trains | Mins | FTS | blank | Files |
-        trustRef    = cells[1] || ''
-        cancelled    = parseInt(cells[2]) || 0
+        // | TDA | TRMC | Can | Pt Can | blank | Trains | Mins | FTS/DIV | blank | Files |
+        tdaRef        = cells[0] && cells[0] !== 'None' ? cells[0] : ''
+        trustRef      = cells[1] || ''
+        trmcCode      = cells[1] || ''
+        cancelled     = parseInt(cells[2]) || 0
         partCancelled = parseInt(cells[3]) || 0
         trainsDelayed = parseInt(cells[5]) || 0
         minutesDelay  = parseInt(cells[6]) || 0
+        ftsDivCount   = parseInt(cells[7]) || 0
+        hasFiles      = /^yes/i.test(cells[9] || '')
       }
       continue
     }
@@ -247,8 +329,43 @@ function parseIncidentBlock(
     // Events section
     if (line === '**EVENTS**') {
       inEvents = true
+      inTrainBlock = false
       eventHeaderSeen = false
       continue
+    }
+
+    // Train section
+    if (line === '**TRAIN**') {
+      inTrainBlock = true
+      inEvents = false
+      trainHeaderSeen = false
+      continue
+    }
+
+    if (inTrainBlock) {
+      if (line.includes('**T. ID**') && line.includes('**Date**')) {
+        trainHeaderSeen = true
+        continue
+      }
+      if (trainHeaderSeen && line.startsWith('|') && !line.includes('**')) {
+        // | T.ID | Date | Time | Origin | Destination | Co | Driver | Guard |
+        if (cells.length >= 6 && /^[0-9A-Z]{4,6}$/i.test(cells[0]) && !trainId) {
+          trainId          = cells[0]
+          trainOrigin      = cells[3] || ''
+          trainDestination = cells[4] || ''
+          trainCompany     = cells[5] || ''
+        }
+        continue
+      }
+      if (line.toLowerCase().includes('vehicle (unit)')) {
+        // | **Vehicle (Unit):** |  | 66548  68012 |
+        const allCells = cellValues(line)
+        const numCell = allCells.find(c => /\d/.test(c) && !/vehicle/i.test(c))
+        if (numCell) {
+          numCell.split(/\s+/).map(s => s.trim()).filter(Boolean).forEach(u => unitNumbers.push(u))
+        }
+        continue
+      }
     }
 
     if (inEvents) {
@@ -317,6 +434,21 @@ function parseIncidentBlock(
   // ── Highlight flag — assigned in parseCCILText after all incidents are known ──
   const isHighlight = false
 
+  // ── Derive type code / label from the CCIL type field ─────────────────────
+  // e.g. "07b Level Crossing Deliberate Misuse" → code "07b", label "Level Crossing Deliberate Misuse"
+  const typeMatch = incidentType.match(/^([0-9A-Z]+[a-z]?)\s+(.+)$/i)
+  const incidentTypeCode  = typeMatch ? typeMatch[1].trim() : incidentType.split(/\s+/)[0] || ''
+  const incidentTypeLabel = typeMatch ? typeMatch[2].trim() : ''
+
+  // ── Responder initials — split action field on whitespace, keep 2–4 uppercase letters ──
+  const responderInitials = action
+    .split(/\s+/)
+    .map(s => s.toUpperCase().trim())
+    .filter(s => /^[A-Z]{2,4}$/.test(s))
+
+  // ── Normalise incidentStart to HH:MM ──────────────────────────────────────
+  const startHHMM = fmtHHMM(incidentStart) || isoDate.slice(11, 16)
+
   return {
     id: `ccil-${ccil}`,
     ccil,
@@ -327,10 +459,8 @@ function parseIncidentBlock(
     title: stripMd(title),
     location: location || 'Unknown',
     area: area || undefined,
-    line: '',
-    incidentStart: incidentStart
-      ? `${incidentStart.slice(0, 2)}:${incidentStart.slice(2, 4)}`
-      : isoDate.slice(11, 16),
+    line: routeLine || undefined,
+    incidentStart: startHHMM,
     description,
     events,
     cancelled,
@@ -341,6 +471,31 @@ function parseIncidentBlock(
     actionCode: action || undefined,
     isHighlight,
     rawText: lines.join('\n').slice(0, 1000),
+
+    // ── Extended Insight fields ──────────────────────────────────────────────
+    incidentTypeCode:  incidentTypeCode  || undefined,
+    incidentTypeLabel: incidentTypeLabel || undefined,
+    possessionRef:     possessionRef     || undefined,
+    thirdPartyRef:     thirdPartyRef     || undefined,
+    advisedTime:       fmtHHMM(advisedTime)  || undefined,
+    initialRespTime:   fmtHHMM(initialResp)  || undefined,
+    arrivedAtTime:     fmtHHMM(arrivedAt)    || undefined,
+    nwrTime:           fmtHHMM(nwrTime)      || undefined,
+    minsToAdvised:     diffMinutes(incidentStart, advisedTime)  ?? undefined,
+    minsToResponse:    diffMinutes(incidentStart, initialResp)  ?? undefined,
+    minsToArrival:     diffMinutes(incidentStart, arrivedAt)    ?? undefined,
+    incidentDuration:  diffMinutes(incidentStart, nwrTime)      ?? undefined,
+    trainId:           trainId           || undefined,
+    trainCompany:      trainCompany      || undefined,
+    trainOrigin:       trainOrigin       || undefined,
+    trainDestination:  trainDestination  || undefined,
+    unitNumbers:       unitNumbers.length ? unitNumbers : undefined,
+    tdaRef:            tdaRef            || undefined,
+    trmcCode:          trmcCode          || undefined,
+    ftsDivCount:       ftsDivCount       || undefined,
+    eventCount:        events.length,
+    hasFiles:          hasFiles || undefined,
+    responderInitials: responderInitials.length ? responderInitials : undefined,
   }
 }
 

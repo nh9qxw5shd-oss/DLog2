@@ -167,6 +167,31 @@ export interface Incident {
   rawText?: string
   isContinuation?: boolean  // true when this CCIL appeared in a prior report
   delayDelta?: number       // additional delay since previous occurrence (continuations only)
+
+  // ── Extended capture for Insight analytics platform ───────────────────────
+  incidentTypeCode?:  string    // CCIL numeric prefix e.g. "05C", "07b"
+  incidentTypeLabel?: string    // Label without the code e.g. "Track Circuit Failure"
+  possessionRef?:     string
+  thirdPartyRef?:     string
+  advisedTime?:       string    // HH:MM
+  initialRespTime?:   string    // HH:MM
+  arrivedAtTime?:     string    // HH:MM
+  nwrTime?:           string    // HH:MM — Normal Working Resumed
+  minsToAdvised?:     number
+  minsToResponse?:    number
+  minsToArrival?:     number
+  incidentDuration?:  number    // mins from incident_start to NWR
+  trainId?:           string
+  trainCompany?:      string
+  trainOrigin?:       string
+  trainDestination?:  string
+  unitNumbers?:       string[]
+  tdaRef?:            string    // Trust Delay Attribution ref
+  trmcCode?:          string    // TRMC responsibility code
+  ftsDivCount?:       number
+  eventCount?:        number    // number of log events (complexity proxy)
+  hasFiles?:          boolean
+  responderInitials?: string[]  // parsed from action_code field
 }
 
 export interface IncidentEvent {
