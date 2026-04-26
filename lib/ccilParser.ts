@@ -35,9 +35,200 @@ const SEVERITY_RULES: Array<[IncidentCategory[], Severity]> = [
   [['SPAD', 'FIRE', 'BRIDGE_STRIKE'],                                   'HIGH'],
   [['TPWS', 'NEAR_MISS', 'IRREGULAR_WORKING', 'HABD_WILD'],            'MEDIUM'],
   [['CRIME', 'LEVEL_CROSSING', 'PASSENGER_INJURY', 'TRACTION_FAILURE'], 'MEDIUM'],
-  [['INFRASTRUCTURE', 'POSSESSION', 'STATION_OVERRUN', 'TRAIN_FAULT'],  'LOW'],
+  [['INFRASTRUCTURE', 'POSSESSION', 'TRAIN_FAULT'],                     'LOW'],
+  [['STATION_OVERRUN'],                                                  'MEDIUM'],
   [['STRANDED_TRAIN', 'WEATHER', 'GENERAL'],                            'INFO'],
 ]
+
+// ─── CCIL label → category (Tier 1 — exact match on the system's own type label) ──
+// These are the 145 official incident type labels from the CCIL Incident Types settings page.
+// The CCIL type field in exports contains: "<code> <label>", e.g. "07b Level Crossing Deliberate Misuse".
+// classifyByTypeLabel strips the code and looks up the label directly.
+
+const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
+  // Safety critical
+  ['Signals Passed At Danger (Category A)',                              'SPAD'],
+  ['Signals Passed At Danger (Category A) (Weather Related)',            'SPAD'],
+  ['TPWS Activation',                                                    'TPWS'],
+  ['Near Miss',                                                          'NEAR_MISS'],
+  ['Concern For Welfare',                                                'NEAR_MISS'],
+  ['Train Struck an Object',                                             'NEAR_MISS'],
+  ['Road Vehicle Incursion (non Level Crossing).',                       'NEAR_MISS'],
+  ['Fatality',                                                           'FATALITY'],
+  ['Person Struck By Train',                                             'PERSON_STRUCK'],
+  // Bridge
+  ['Bridge Strike',                                                      'BRIDGE_STRIKE'],
+  ['Bridge/structural defects or incidents (ex. bridge strikes)',        'BRIDGE_STRIKE'],
+  // Irregular working / dispatch
+  ['Irregular Working : Network Rail Infrastructure',                    'IRREGULAR_WORKING'],
+  ['Irregular Working : Network Rail Infrastructure Projects',           'IRREGULAR_WORKING'],
+  ['Irregular Working : Network Rail Operations',                        'IRREGULAR_WORKING'],
+  ['Irregular Working : TOC',                                            'IRREGULAR_WORKING'],
+  ['Dispatch Incidents',                                                 'IRREGULAR_WORKING'],
+  ['Incorrect Door Release',                                             'IRREGULAR_WORKING'],
+  ['Group Standard GE/RT3350',                                           'IRREGULAR_WORKING'],
+  ['Group Standard GE/RT8250',                                           'IRREGULAR_WORKING'],
+  ['Missed Power Changeover',                                            'IRREGULAR_WORKING'],
+  ['Speeding',                                                           'IRREGULAR_WORKING'],
+  // HABD/WILD
+  ['Wheelchex / WILD activation and Confirmed Hot Axle Boxes',           'HABD_WILD'],
+  // Derailment / collision
+  ['Derailment',                                                         'DERAILMENT'],
+  ['Divided Train',                                                      'DERAILMENT'],
+  ['Train or Vehicle Runaway',                                           'DERAILMENT'],
+  ['Collision',                                                          'DERAILMENT'],
+  // Level crossing
+  ['Level Crossing Deliberate Misuse',                                   'LEVEL_CROSSING'],
+  ['Level Crossing Incident',                                            'LEVEL_CROSSING'],
+  ['Level Crossing Failure',                                             'LEVEL_CROSSING'],
+  ['Level Crossing Failure - Telephones',                                'LEVEL_CROSSING'],
+  // Fire
+  ['Fires',                                                              'FIRE'],
+  ['Lineside Fire',                                                      'FIRE'],
+  // Crime / security
+  ['Railway Crime',                                                      'CRIME'],
+  ['Trespass',                                                           'CRIME'],
+  ['Criminal Damage / Vandalism',                                        'CRIME'],
+  ['Graffiti',                                                           'CRIME'],
+  ['Security Issues',                                                    'CRIME'],
+  ['Cable Crime',                                                        'CRIME'],
+  ['Exclusion Zone',                                                     'CRIME'],
+  ['Unsecured Access Gate',                                              'CRIME'],
+  // Passenger / staff injuries
+  ['Passenger / Public Injuries / Assaults',                             'PASSENGER_INJURY'],
+  ['Staff / Contractor Injuries / Assaults',                             'PASSENGER_INJURY'],
+  ['Passenger Illness',                                                  'PASSENGER_INJURY'],
+  // Station overrun
+  ['Station Overrun',                                                    'STATION_OVERRUN'],
+  ['Station Overrun (Weather Related)',                                   'STATION_OVERRUN'],
+  // Possession
+  ['Possession Monitoring',                                              'POSSESSION'],
+  ['Possession Overrun',                                                 'POSSESSION'],
+  ['Significant Possession Problem',                                     'POSSESSION'],
+  ['Isolations',                                                         'POSSESSION'],
+  // Infrastructure
+  ['Axle Counter Failure',                                               'INFRASTRUCTURE'],
+  ['Broken Rail / Track defect',                                         'INFRASTRUCTURE'],
+  ['Track Circuit Failure',                                              'INFRASTRUCTURE'],
+  ['Track Circuit Failure (Leaf Fall)',                                   'INFRASTRUCTURE'],
+  ['Points Failure',                                                     'INFRASTRUCTURE'],
+  ['Signalling Incident',                                                'INFRASTRUCTURE'],
+  ['Signals / Signalling system failure',                                'INFRASTRUCTURE'],
+  ['Signal Obscured by Foliage',                                         'INFRASTRUCTURE'],
+  ['Signal Obscured by Light',                                           'INFRASTRUCTURE'],
+  ['OHL Dewirement',                                                     'INFRASTRUCTURE'],
+  ['Power Failure',                                                      'INFRASTRUCTURE'],
+  ['Earthworks',                                                         'INFRASTRUCTURE'],
+  ['Geometry failure',                                                   'INFRASTRUCTURE'],
+  ['GSM-R',                                                              'INFRASTRUCTURE'],
+  ['Lineside Fencing and Foliage',                                       'INFRASTRUCTURE'],
+  ['Station Infrastructure',                                             'INFRASTRUCTURE'],
+  ['D.O.O. Station Equipment',                                           'INFRASTRUCTURE'],
+  ['Emergency Speed Restrictions',                                       'INFRASTRUCTURE'],
+  ['Temporary Speed Restriction (TSR)',                                   'INFRASTRUCTURE'],
+  ['Speed Restriction Issues',                                           'INFRASTRUCTURE'],
+  ['Object/plastic on OHL',                                              'INFRASTRUCTURE'],
+  ['RETB',                                                               'INFRASTRUCTURE'],
+  ['Tree or Branch on the Line',                                         'INFRASTRUCTURE'],
+  ['Rough Ride Report by MOP via Control',                               'INFRASTRUCTURE'],
+  ['ADD Operation',                                                      'INFRASTRUCTURE'],
+  ['Reportable Rail Head Conditions',                                    'INFRASTRUCTURE'],
+  ['Train Stop & Examine',                                               'INFRASTRUCTURE'],
+  ['Outstation Alarm',                                                   'INFRASTRUCTURE'],
+  ['Line Blockage Issues',                                               'INFRASTRUCTURE'],
+  ['IT/Telecoms issues',                                                 'INFRASTRUCTURE'],
+  ['Outage NR/3rd Party',                                                'INFRASTRUCTURE'],
+  ['Stopping Incidents',                                                 'INFRASTRUCTURE'],
+  // Traction failure
+  ['Traction Current Problem',                                           'TRACTION_FAILURE'],
+  ['Traction Failure non-Passenger',                                     'TRACTION_FAILURE'],
+  ['Traction Failure Passenger',                                         'TRACTION_FAILURE'],
+  ['Circuit Breaker Tripping',                                           'TRACTION_FAILURE'],
+  ['Emergency Switch Off',                                               'TRACTION_FAILURE'],
+  // Train fault
+  ['On Train Defect - non group standard',                               'TRAIN_FAULT'],
+  ['On Train Defect - RB TW5',                                           'TRAIN_FAULT'],
+  ['Train Failure on Depot',                                             'TRAIN_FAULT'],
+  ['Train Door Incidents',                                               'TRAIN_FAULT'],
+  ['AWS Brake Demand',                                                   'TRAIN_FAULT'],
+  ['Unsolicited Brake Application',                                      'TRAIN_FAULT'],
+  ['ETCS incident',                                                      'TRAIN_FAULT'],
+  ['Coaches locked out of use',                                          'TRAIN_FAULT'],
+  ['De-registered Vehicles / Locomotives and Overload rejections',       'TRAIN_FAULT'],
+  // Weather
+  ['Flooding',                                                           'WEATHER'],
+  ['Heat Speeds',                                                        'WEATHER'],
+  ['Rainfall – Landslip Risk',                                      'WEATHER'],
+  ['Convective Rainfall Alert Tool (CAT Tool)',                           'WEATHER'],
+  ['Weather Related Proactive Measures',                                 'WEATHER'],
+  ['Weather Related Problems - Any Other',                               'WEATHER'],
+  ['Freight Adhesion Issues',                                            'WEATHER'],
+  // General / admin
+  ['Actions Taken to Improve Performance',                               'GENERAL'],
+  ['Alternative Transport Issues including RTA',                         'GENERAL'],
+  ['Animals on the line',                                                'GENERAL'],
+  ['Air Traffic Incidents',                                              'GENERAL'],
+  ['Building Entry',                                                     'GENERAL'],
+  ['Call for Aid',                                                       'GENERAL'],
+  ['Catering Issues',                                                    'GENERAL'],
+  ['Dangerous Goods Incident',                                           'GENERAL'],
+  ['Depot Operating Issues',                                             'GENERAL'],
+  ['Disturbance to/of a projected site/species',                         'GENERAL'],
+  ['Egress Activation',                                                  'GENERAL'],
+  ['Fleet Performance',                                                  'GENERAL'],
+  ['Flytipping',                                                         'GENERAL'],
+  ['Freight Trains over Length',                                         'GENERAL'],
+  ['I.T. Problem',                                                       'GENERAL'],
+  ['Item dropped on track',                                              'GENERAL'],
+  ['Major Incident Command Decision Log',                                'GENERAL'],
+  ['Management of Early Running Train',                                  'GENERAL'],
+  ['Miscellaneous',                                                      'GENERAL'],
+  ['On Train Cleaning',                                                  'GENERAL'],
+  ['Other (environment)',                                                 'GENERAL'],
+  ['Passenger Loadings',                                                 'GENERAL'],
+  ['Passenger Matters General',                                          'GENERAL'],
+  ['Passenger on ECS',                                                   'GENERAL'],
+  ['Passenger Special Needs',                                            'GENERAL'],
+  ['Passcomm Activation',                                                'GENERAL'],
+  ['Planning Errors',                                                    'GENERAL'],
+  ['Real Time Performance Figures',                                      'GENERAL'],
+  ['Rolling Stock Traction Hire',                                        'GENERAL'],
+  ['Shift Change',                                                       'GENERAL'],
+  ['Special Event (e.g. Football Incident)',                             'GENERAL'],
+  ['Spills and leaks',                                                   'GENERAL'],
+  ['Spread of an invasive non-native species',                           'GENERAL'],
+  ['Staff Illness',                                                      'GENERAL'],
+  ['Staff Issues',                                                       'GENERAL'],
+  ['Staff on ECS',                                                       'GENERAL'],
+  ['Station Incident',                                                   'GENERAL'],
+  ['Statutory nuisance (noise, dust or smoke, light, odour, unsightly conditions)', 'GENERAL'],
+  ['Timetable / Diagram / Schedule / Notice / Simplifier Error',         'GENERAL'],
+  ['Train Crew Hire',                                                    'GENERAL'],
+  ['Train Crew Incident',                                                'GENERAL'],
+  ['Train Regulation Issues',                                            'GENERAL'],
+  ['Train Service Alterations - Delay',                                  'GENERAL'],
+]
+
+/** Normalise a label for case-insensitive, dash-tolerant lookup */
+function normalizeForLookup(s: string): string {
+  return s
+    .replace(/[–—]/g, '-')   // en/em dash → ASCII hyphen
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+const LABEL_CATEGORY_LOOKUP: Map<string, IncidentCategory> = new Map(
+  CCIL_LABEL_MAP.map(([label, cat]) => [normalizeForLookup(label), cat])
+)
+
+/** Strip the leading numeric/alpha type code and look up the label text */
+function classifyByTypeLabel(typeField: string): IncidentCategory | null {
+  const cleaned = typeField.replace(/\*\*/g, '').replace(/\*/g, '').trim()
+  const withoutCode = cleaned.replace(/^[0-9A-Z]+[a-z]?\s+/i, '').trim()
+  if (!withoutCode) return null
+  return LABEL_CATEGORY_LOOKUP.get(normalizeForLookup(withoutCode)) ?? null
+}
 
 // ─── Skip filters — administrative log types ──────────────────────────────────
 
@@ -113,8 +304,8 @@ const TYPE_CODE_MAP: Array<[RegExp, IncidentCategory]> = [
   [/^12\s/i,          'FATALITY'],         // 12 Fatality
   [/^13\s/i,          'PERSON_STRUCK'],    // 13 Person struck
   [/^14\s/i,          'PASSENGER_INJURY'], // 14 Passenger/public injury or assault
-  [/^15[0-9A]?\s/i,   'CRIME'],           // 15/15A trespass/crime; 155 dispatch incidents → IRREGULAR
-  [/^155\s/i,         'IRREGULAR_WORKING'],// 155 Dispatch incidents (override 15x match)
+  [/^155\s/i,         'IRREGULAR_WORKING'],// 155 Dispatch incidents — must precede the 15x wildcard
+  [/^15[0-9A]?\s/i,   'CRIME'],           // 15/15A trespass/crime
   [/^16\s/i,          'CRIME'],            // 16 Crime
   [/^17[A-Z]?\s/i,    'WEATHER'],         // 17 Weather (including 17A)
   [/^18\s/i,          'FIRE'],             // 18 Fires
@@ -391,10 +582,14 @@ function parseIncidentBlock(
   }
 
   // ── Classification ─────────────────────────────────────────────────────────
-  // 1. CCIL numeric type code (authoritative — directly from the system)
-  // 2. Pattern match on title + type label + location + first event
+  // Tier 1: exact CCIL label lookup (the type field contains the system's own label text)
+  // Tier 2: CCIL numeric type code prefix
+  // Tier 3: regex pattern matching on full search text
   const searchText = `${title} ${incidentType} ${location} ${events[0]?.description || ''}`
-  let category: IncidentCategory = classifyByTypeCode(incidentType) || 'GENERAL'
+  let category: IncidentCategory =
+    classifyByTypeLabel(incidentType) ??
+    classifyByTypeCode(incidentType) ??
+    'GENERAL'
   if (category === 'GENERAL') {
     for (const [pat, cat] of CATEGORY_PATTERNS) {
       if (pat.test(searchText)) { category = cat; break }
@@ -423,9 +618,12 @@ function parseIncidentBlock(
   for (const [cats, sev] of SEVERITY_RULES) {
     if (cats.includes(category)) { severity = sev; break }
   }
-  if (severity === 'LOW' && minutesDelay > 2000) severity = 'CRITICAL'
-  else if (severity === 'LOW' && minutesDelay > 1000) severity = 'HIGH'
-  else if (severity === 'LOW' && minutesDelay > 500) severity = 'MEDIUM'
+  const SEV_ORDER: Severity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+  const escalate = (current: Severity, target: Severity): Severity =>
+    SEV_ORDER.indexOf(target) > SEV_ORDER.indexOf(current) ? target : current
+  if (minutesDelay > 2000)      severity = escalate(severity, 'CRITICAL')
+  else if (minutesDelay > 1000) severity = escalate(severity, 'HIGH')
+  else if (minutesDelay > 500)  severity = escalate(severity, 'MEDIUM')
 
   // ── Best description ───────────────────────────────────────────────────────
   const nrEvent = events.find(e => e.company === 'NR' && e.description.length > 50)
@@ -549,14 +747,18 @@ export function parseCCILText(rawText: string): Incident[] {
     return d !== 0 ? d : (b.minutesDelay || 0) - (a.minutesDelay || 0)
   })
 
-  // ── Auto-highlight: top 5 incidents with delay > 100 min ──────────────────
-  const highlighted = new Set(
-    [...incidents]
-      .filter(i => (i.minutesDelay || 0) > 100)
-      .sort((a, b) => (b.minutesDelay || 0) - (a.minutesDelay || 0))
-      .slice(0, 5)
-      .map(i => i.id)
-  )
+  // ── Auto-highlight ─────────────────────────────────────────────────────────
+  // Always highlight CRITICAL/HIGH (safety-critical regardless of delay).
+  // Additionally highlight up to 5 highest-delay incidents (>100 min).
+  const highlighted = new Set<string>()
+  incidents
+    .filter(i => i.severity === 'CRITICAL' || i.severity === 'HIGH')
+    .forEach(i => highlighted.add(i.id))
+  incidents
+    .filter(i => (i.minutesDelay || 0) > 100 && !highlighted.has(i.id))
+    .sort((a, b) => (b.minutesDelay || 0) - (a.minutesDelay || 0))
+    .slice(0, 5)
+    .forEach(i => highlighted.add(i.id))
   incidents.forEach(i => { i.isHighlight = highlighted.has(i.id) })
 
   return incidents
