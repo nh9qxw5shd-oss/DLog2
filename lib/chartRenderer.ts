@@ -140,6 +140,7 @@ function xLabelsRotated(
 function drawDualLineChart(
   canvas: HTMLCanvasElement,
   labels: string[], delayVals: number[], countVals: number[],
+  ttl: string,
 ): void {
   const ctx = canvas.getContext('2d')!
   const W = canvas.width, H = canvas.height
@@ -148,7 +149,7 @@ function drawDualLineChart(
   const n = labels.length
 
   ctx.fillStyle = OFFWHT; ctx.fillRect(0, 0, W, H)
-  title(ctx, W, 'Delay Minutes & Incident Count per Reporting Period')
+  title(ctx, W, ttl)
 
   if (n === 0) { noData(ctx, W, H, 'No data yet'); return }
 
@@ -260,6 +261,7 @@ function drawHorizBarChart(
 function drawTimeOfDayChart(
   canvas: HTMLCanvasElement,
   byHour: number[],
+  ttl: string,
 ): void {
   const ctx = canvas.getContext('2d')!
   const W = canvas.width, H = canvas.height
@@ -267,7 +269,7 @@ function drawTimeOfDayChart(
   const CX = PAD.left, CY = PAD.top, CW = W - PAD.left - PAD.right, CH = H - PAD.top - PAD.bottom
 
   ctx.fillStyle = OFFWHT; ctx.fillRect(0, 0, W, H)
-  title(ctx, W, 'Incident Distribution by Time of Day')
+  title(ctx, W, ttl)
 
   const maxVal = niceMax(Math.max(...byHour, 1))
   yGridAndLabels(ctx, CX, CY, CW, CH, maxVal, 5)
@@ -320,6 +322,7 @@ function drawTimeOfDayChart(
 function drawAvgDelayChart(
   canvas: HTMLCanvasElement,
   labels: string[], values: number[],
+  ttl: string,
 ): void {
   const ctx = canvas.getContext('2d')!
   const W = canvas.width, H = canvas.height
@@ -328,7 +331,7 @@ function drawAvgDelayChart(
   const n = labels.length
 
   ctx.fillStyle = OFFWHT; ctx.fillRect(0, 0, W, H)
-  title(ctx, W, 'Average Delay per Incident per Reporting Period')
+  title(ctx, W, ttl)
 
   if (n === 0) { noData(ctx, W, H, 'No data yet'); return }
 
@@ -363,6 +366,7 @@ function drawStackedBarChart(
   canvas: HTMLCanvasElement,
   dateLabels: string[],
   datasets: Array<{ label: string; color: string; values: number[] }>,
+  ttl: string,
 ): void {
   const ctx = canvas.getContext('2d')!
   const W = canvas.width, H = canvas.height
@@ -372,7 +376,7 @@ function drawStackedBarChart(
   const n = dateLabels.length
 
   ctx.fillStyle = OFFWHT; ctx.fillRect(0, 0, W, H)
-  title(ctx, W, 'Safety-Critical Incident Categories over Time')
+  title(ctx, W, ttl)
 
   // Legend (between title and chart area)
   const activeDS = datasets.filter(ds => ds.values.some(v => v > 0))
@@ -432,37 +436,41 @@ export async function renderHistoricalCharts(
     throw new Error('renderHistoricalCharts must be called in a browser context')
   }
 
-  const trend = data.trendPoints.slice(-30)
+  const trend = data.trendPoints
   const trendLabels = trend.map(p => shortDate(p.date))
+  const windowLabel = `Last ${data.windowDays} Days`
 
   // ── Page 1 charts ────────────────────────────────────────────────────────
 
   // Chart 1: dual-line delay + incident count
   const c1 = document.createElement('canvas'); c1.width = CW; c1.height = H_TREND
-  drawDualLineChart(c1, trendLabels, trend.map(p => p.totalDelay), trend.map(p => p.incidentCount))
+  drawDualLineChart(c1, trendLabels, trend.map(p => p.totalDelay), trend.map(p => p.incidentCount),
+    `Delay Minutes & Incident Count — ${windowLabel}`)
 
   // Chart 2: incident type distribution
   const c2 = document.createElement('canvas'); c2.width = CW; c2.height = H_BAR
   const cats = data.categoryBreakdown
   drawHorizBarChart(c2, cats.map(c => c.label), cats.map(c => c.count), cats.map(c => c.color),
-    'Incident Type Distribution (All Reporting Periods)')
+    `Incident Type Distribution (${windowLabel})`)
 
   // Chart 3: top locations
   const c3 = document.createElement('canvas'); c3.width = CW; c3.height = H_BAR
   const locs = data.locationBreakdown
   drawHorizBarChart(c3, locs.map(l => l.location), locs.map(l => l.count), locs.map(() => STEEL),
-    'Top Locations by Incident Count (All Reporting Periods)')
+    `Top Locations by Incident Count (${windowLabel})`)
 
   // ── Page 2 charts ────────────────────────────────────────────────────────
 
   // Chart 4: time of day
   const c4 = document.createElement('canvas'); c4.width = CW; c4.height = H_TIME
-  drawTimeOfDayChart(c4, data.timeOfDayBreakdown)
+  drawTimeOfDayChart(c4, data.timeOfDayBreakdown,
+    `Incident Distribution by Time of Day — ${windowLabel}`)
 
   // Chart 5: average delay per incident
   const c5 = document.createElement('canvas'); c5.width = CW; c5.height = H_TIME
   const avgDelayVals = trend.map(p => p.incidentCount > 0 ? Math.round(p.totalDelay / p.incidentCount) : 0)
-  drawAvgDelayChart(c5, trendLabels, avgDelayVals)
+  drawAvgDelayChart(c5, trendLabels, avgDelayVals,
+    `Average Delay per Incident — ${windowLabel}`)
 
   // Chart 6: safety-critical stacked bar
   const safeTrend = data.safetyCategoryTrend
@@ -473,7 +481,8 @@ export async function renderHistoricalCharts(
     values: safeTrend.map(p => p.counts[cat.key] ?? 0),
   }))
   const c6 = document.createElement('canvas'); c6.width = CW; c6.height = H_BAR
-  drawStackedBarChart(c6, safeLabels, safeDatasets)
+  drawStackedBarChart(c6, safeLabels, safeDatasets,
+    `Safety-Critical Incidents by Category — ${windowLabel}`)
 
   return {
     delayTrend:          c1.toDataURL('image/jpeg', 0.82),

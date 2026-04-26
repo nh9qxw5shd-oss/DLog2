@@ -682,7 +682,7 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
     newPage()
     sectionHead(
       'HISTORICAL TRENDS — EMCC INCIDENT DATA',
-      `${chartImages.reportCount} report${chartImages.reportCount !== 1 ? 's' : ''} in database`
+      `${chartImages.reportCount} report${chartImages.reportCount !== 1 ? 's' : ''} in database · Rolling 30-Day Window`
     )
 
     const chartW = W - M * 2

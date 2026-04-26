@@ -47,6 +47,8 @@ export interface SafetyCategoryTrendPoint {
   counts: Partial<Record<string, number>>
 }
 
+export const ANALYTICS_WINDOW_DAYS = 30
+
 export interface HistoricalChartData {
   trendPoints: ReportTrendPoint[]
   categoryBreakdown: CategoryBreakdown[]
@@ -54,6 +56,7 @@ export interface HistoricalChartData {
   timeOfDayBreakdown: number[]               // 24 entries, index = hour (0–23)
   safetyCategoryTrend: SafetyCategoryTrendPoint[]
   reportCount: number
+  windowDays: number
 }
 
 // ─── Upsert ───────────────────────────────────────────────────────────────────
@@ -168,14 +171,21 @@ export async function upsertReportData(log: LogState): Promise<void> {
 
 // ─── Fetch historical data for chart rendering ────────────────────────────────
 
-export async function fetchHistoricalData(): Promise<HistoricalChartData | null> {
+export async function fetchHistoricalData(
+  windowDays = ANALYTICS_WINDOW_DAYS,
+): Promise<HistoricalChartData | null> {
   const sb = getClient()
   if (!sb) return null
 
-  // Single query covers all charts; include continuation flags for correct accounting
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - windowDays + 1)
+  const cutoffDate = cutoff.toISOString().slice(0, 10)
+
+  // Rolling window query: only incidents within the analytics window
   const { data: rows, error } = await sb
     .from('incidents')
     .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
+    .gte('report_date', cutoffDate)
     .order('report_date', { ascending: true })
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
@@ -263,5 +273,6 @@ export async function fetchHistoricalData(): Promise<HistoricalChartData | null>
     timeOfDayBreakdown: byHour,
     safetyCategoryTrend,
     reportCount: count ?? 0,
+    windowDays,
   }
 }
