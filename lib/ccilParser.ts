@@ -210,7 +210,7 @@ export const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
 ]
 
 /** Normalise a label for case-insensitive, dash-tolerant lookup */
-function normalizeForLookup(s: string): string {
+export function normalizeForLookup(s: string): string {
   return s
     .replace(/[–—]/g, '-')   // en/em dash → ASCII hyphen
     .replace(/\s+/g, ' ')
@@ -706,9 +706,22 @@ function parseIncidentBlock(
   }
 }
 
+// ─── Built-in category key set — used to distinguish custom group keys ────────
+
+const BUILT_IN_CATS = new Set<string>([
+  'FATALITY','PERSON_STRUCK','SPAD','TPWS','IRREGULAR_WORKING','NEAR_MISS','CRIME',
+  'BRIDGE_STRIKE','HABD_WILD','LEVEL_CROSSING','FIRE','PASSENGER_INJURY','DERAILMENT',
+  'INFRASTRUCTURE','TRACTION_FAILURE','TRAIN_FAULT','POSSESSION','STATION_OVERRUN',
+  'STRANDED_TRAIN','WEATHER','GENERAL',
+])
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export function parseCCILText(rawText: string): Incident[] {
+/** @param labelOverrides - normalized CCIL label → group key from user settings */
+export function parseCCILText(
+  rawText: string,
+  labelOverrides: Record<string, string> = {}
+): Incident[] {
   const lines = rawText.split('\n')
   const incidents: Incident[] = []
 
@@ -737,6 +750,24 @@ export function parseCCILText(rawText: string): Incident[] {
     if (SKIP_TITLE_PATTERNS.some(p => p.test(title))) continue
 
     const incident = parseIncidentBlock(blockLines, title, ccil, isoDate)
+
+    // Apply user label overrides (from settings page)
+    if (incident.incidentTypeLabel) {
+      const groupKey = labelOverrides[normalizeForLookup(incident.incidentTypeLabel)]
+      if (groupKey) {
+        if (BUILT_IN_CATS.has(groupKey)) {
+          incident.category = groupKey as IncidentCategory
+          // Recompute base severity for the new category
+          let newSev: Severity = 'INFO'
+          for (const [cats, sev] of SEVERITY_RULES) {
+            if ((cats as string[]).includes(groupKey)) { newSev = sev; break }
+          }
+          incident.severity = newSev
+        } else {
+          incident.displayGroup = groupKey
+        }
+      }
+    }
 
     // Drop pure noise: GENERAL/INFO with no disruption data and <=1 event
     // These are administrative entries that slipped through the title filter

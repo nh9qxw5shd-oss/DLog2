@@ -1,25 +1,36 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { IncidentCategory, Severity } from './types'
+import { CCIL_LABEL_MAP, normalizeForLookup } from './ccilParser'
+import { saveAppSettings, loadAppSettings, isSupabaseConfigured } from './supabaseClient'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface CategoryGroupConfig {
-  displayName: string    // label shown in UI and PDF headers
-  shortCode: string      // badge code shown on incident cards (max 6 chars)
-  color: string          // hex colour for icon + badge
-  severity: Severity     // default severity assigned during parsing
-  showInSummary: boolean // include this group in the safety KPI summary
-  kpiGroup?: string      // optional — categories sharing a kpiGroup are summed together
-  priority: number       // display / sort order
+  displayName: string
+  shortCode: string
+  color: string
+  severity: Severity
+  showInSummary: boolean
+  kpiGroup?: string
+  priority: number
+  isCustom?: boolean
 }
 
-const STORAGE_KEY = 'dlog2-category-settings-v1'
+export interface CategorySettings {
+  version: 1
+  /** All group configs — built-in IncidentCategory keys plus any custom keys */
+  groups: Record<string, CategoryGroupConfig>
+  /** normalizedCcilLabel → groupKey (overrides the default from CCIL_LABEL_MAP) */
+  labelOverrides: Record<string, string>
+  /** Group keys the user has created (subset of groups that are custom) */
+  customGroupKeys: string[]
+}
+
+export type SaveStatus = 'idle' | 'saving' | 'saved-local' | 'saved-cloud' | 'error'
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
-// showInSummary reflects the requested KPI set:
-//   Person Struck, SPADs, TPWS, Near Miss, Crime/Trespass, Irregular Working
 
 export const DEFAULT_GROUP_CONFIG: Record<IncidentCategory, CategoryGroupConfig> = {
   FATALITY:          { displayName: 'Person Struck / Fatality',    shortCode: 'PST',   color: '#E74C3C', severity: 'CRITICAL', showInSummary: true,  kpiGroup: 'person-struck', priority: 1  },
@@ -45,87 +56,224 @@ export const DEFAULT_GROUP_CONFIG: Record<IncidentCategory, CategoryGroupConfig>
   GENERAL:           { displayName: 'General / Other',             shortCode: 'GEN',   color: '#4A6FA5', severity: 'INFO',     showInSummary: false, priority: 21 },
 }
 
-// ─── Load / merge helpers ─────────────────────────────────────────────────────
-
-function loadSettings(): Record<IncidentCategory, CategoryGroupConfig> {
-  if (typeof window === 'undefined') return { ...DEFAULT_GROUP_CONFIG }
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Record<IncidentCategory, Partial<CategoryGroupConfig>>>
-      const merged: Record<IncidentCategory, CategoryGroupConfig> = { ...DEFAULT_GROUP_CONFIG }
-      for (const [k, v] of Object.entries(parsed)) {
-        const cat = k as IncidentCategory
-        if (merged[cat] && v) merged[cat] = { ...merged[cat], ...v }
-      }
-      return merged
-    }
-  } catch {}
-  return { ...DEFAULT_GROUP_CONFIG }
+function defaultSettings(): CategorySettings {
+  return { version: 1, groups: { ...DEFAULT_GROUP_CONFIG }, labelOverrides: {}, customGroupKeys: [] }
 }
 
-function saveSettings(s: Record<IncidentCategory, CategoryGroupConfig>) {
+// ─── LocalStorage helpers ─────────────────────────────────────────────────────
+
+const STORAGE_KEY = 'dlog2-category-settings-v2'
+
+function mergeWithDefaults(partial: Partial<CategorySettings>): CategorySettings {
+  const d = defaultSettings()
+  return {
+    version: 1,
+    groups:         { ...d.groups, ...(partial.groups        ?? {}) },
+    labelOverrides: partial.labelOverrides ?? {},
+    customGroupKeys: partial.customGroupKeys ?? [],
+  }
+}
+
+function loadFromLocalStorage(): CategorySettings {
+  if (typeof window === 'undefined') return defaultSettings()
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return mergeWithDefaults(JSON.parse(raw))
+  } catch {}
+  return defaultSettings()
+}
+
+function saveToLocalStorage(s: CategorySettings) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) } catch {}
+}
+
+// ─── Label helpers (exported for settings page) ───────────────────────────────
+
+/** Returns all CCIL labels currently assigned to a group (default + overrides applied). */
+export function getLabelsForGroup(settings: CategorySettings, groupKey: string): string[] {
+  return CCIL_LABEL_MAP
+    .filter(([label, defaultGroup]) => {
+      const norm = normalizeForLookup(label)
+      const effective = settings.labelOverrides[norm] ?? defaultGroup
+      return effective === groupKey
+    })
+    .map(([label]) => label)
+}
+
+/** Returns all CCIL labels that have no override (their default group). */
+export function getUnassignedLabels(settings: CategorySettings): string[] {
+  return CCIL_LABEL_MAP
+    .filter(([label]) => !settings.labelOverrides[normalizeForLookup(label)])
+    .map(([label]) => label)
+}
+
+/** Sorted list of all group keys, built-in first then custom. */
+export function sortedGroupKeys(settings: CategorySettings): string[] {
+  return Object.entries(settings.groups)
+    .sort(([, a], [, b]) => a.priority - b.priority)
+    .map(([k]) => k)
 }
 
 // ─── React hook ───────────────────────────────────────────────────────────────
 
 export function useCategorySettings() {
-  const [settings, setSettings] = useState<Record<IncidentCategory, CategoryGroupConfig>>(DEFAULT_GROUP_CONFIG)
+  const [settings, setSettings]     = useState<CategorySettings>(defaultSettings)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const [isLoaded, setIsLoaded]     = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
 
-  useEffect(() => { setSettings(loadSettings()) }, [])
+  // Mount: load localStorage instantly, then sync from Supabase
+  useEffect(() => {
+    const local = loadFromLocalStorage()
+    setSettings(local)
+    setIsLoaded(true)
 
-  const updateCategory = (cat: IncidentCategory, patch: Partial<CategoryGroupConfig>) =>
+    if (isSupabaseConfigured()) {
+      loadAppSettings()
+        .then(remote => {
+          if (remote) {
+            const merged = mergeWithDefaults(remote as Partial<CategorySettings>)
+            setSettings(merged)
+            saveToLocalStorage(merged)
+          }
+        })
+        .catch(() => {})
+    }
+  }, [])
+
+  const persistSave = useCallback((next: CategorySettings) => {
+    saveToLocalStorage(next)
+
+    if (!isSupabaseConfigured()) {
+      setSaveStatus('saved-local')
+      setTimeout(() => setSaveStatus('idle'), 2000)
+      return
+    }
+
+    setSaveStatus('saving')
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      try {
+        await saveAppSettings(next)
+        setSaveStatus('saved-cloud')
+      } catch {
+        setSaveStatus('error')
+      }
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    }, 800)
+  }, [])
+
+  const update = useCallback((fn: (prev: CategorySettings) => CategorySettings) => {
     setSettings(prev => {
-      const next = { ...prev, [cat]: { ...prev[cat], ...patch } }
-      saveSettings(next)
+      const next = fn(prev)
+      persistSave(next)
       return next
     })
+  }, [persistSave])
 
-  const resetToDefaults = () => {
-    try { localStorage.removeItem(STORAGE_KEY) } catch {}
-    setSettings({ ...DEFAULT_GROUP_CONFIG })
+  // ── Group config edits ──────────────────────────────────────────────────────
+
+  const updateGroup = useCallback((key: string, patch: Partial<CategoryGroupConfig>) =>
+    update(prev => ({
+      ...prev,
+      groups: { ...prev.groups, [key]: { ...prev.groups[key], ...patch } },
+    })), [update])
+
+  const addGroup = useCallback((cfg: Omit<CategoryGroupConfig, 'priority' | 'isCustom'>) => {
+    const key = cfg.displayName.toUpperCase().replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').slice(0, 24)
+    update(prev => {
+      const maxPri = Math.max(...Object.values(prev.groups).map(g => g.priority), 0)
+      return {
+        ...prev,
+        groups: { ...prev.groups, [key]: { ...cfg, isCustom: true, priority: maxPri + 1 } },
+        customGroupKeys: [...prev.customGroupKeys, key],
+      }
+    })
+    return key
+  }, [update])
+
+  const removeGroup = useCallback((key: string) =>
+    update(prev => {
+      const newOverrides = Object.fromEntries(
+        Object.entries(prev.labelOverrides).filter(([, v]) => v !== key)
+      )
+      const { [key]: _gone, ...newGroups } = prev.groups
+      return {
+        ...prev,
+        groups: newGroups,
+        labelOverrides: newOverrides,
+        customGroupKeys: prev.customGroupKeys.filter(k => k !== key),
+      }
+    }), [update])
+
+  // ── Label assignment ────────────────────────────────────────────────────────
+
+  const moveLabelToGroup = useCallback((normalizedLabel: string, targetGroupKey: string) =>
+    update(prev => {
+      const defaultGroup = CCIL_LABEL_MAP
+        .find(([l]) => normalizeForLookup(l) === normalizedLabel)?.[1] ?? 'GENERAL'
+      const newOverrides = { ...prev.labelOverrides }
+      if (targetGroupKey === defaultGroup) {
+        delete newOverrides[normalizedLabel]   // revert to default — no override needed
+      } else {
+        newOverrides[normalizedLabel] = targetGroupKey
+      }
+      return { ...prev, labelOverrides: newOverrides }
+    }), [update])
+
+  const resetToDefaults = useCallback(() => {
+    const fresh = defaultSettings()
+    setSettings(fresh)
+    persistSave(fresh)
+  }, [persistSave])
+
+  return {
+    settings,
+    saveStatus,
+    isLoaded,
+    updateGroup,
+    addGroup,
+    removeGroup,
+    moveLabelToGroup,
+    resetToDefaults,
   }
-
-  return { settings, updateCategory, resetToDefaults }
 }
 
-/** Synchronous read for use outside React (e.g. pdfGenerator). Falls back to defaults. */
-export function readCategorySettings(): Record<IncidentCategory, CategoryGroupConfig> {
-  return loadSettings()
+// ─── Synchronous read (for use at parse time, outside React) ─────────────────
+
+export function readCategorySettings(): CategorySettings {
+  return loadFromLocalStorage()
 }
 
-// ─── KPI summary builder ──────────────────────────────────────────────────────
-// Groups categories that share a kpiGroup key, returning one row per unique
-// (kpiGroup | category) with the summed count.
+// ─── KPI row builder ──────────────────────────────────────────────────────────
 
-export interface KpiRow {
-  label: string
-  count: number
-  urgent: boolean
-}
+export interface KpiRow { label: string; count: number; urgent: boolean }
 
 export function buildKpiRows(
-  incidents: { category: IncidentCategory }[],
-  settings: Record<IncidentCategory, CategoryGroupConfig>
+  incidents: { category: string; displayGroup?: string }[],
+  settings: CategorySettings
 ): KpiRow[] {
   const seen = new Set<string>()
   const rows: KpiRow[] = []
 
-  const sorted = Object.entries(settings)
-    .sort(([, a], [, b]) => a.priority - b.priority)
-
-  for (const [cat, cfg] of sorted) {
+  for (const [key, cfg] of Object.entries(settings.groups).sort(([, a], [, b]) => a.priority - b.priority)) {
     if (!cfg.showInSummary) continue
-    const key = cfg.kpiGroup ?? cat
-    if (seen.has(key)) continue
-    seen.add(key)
+    const kpiKey = cfg.kpiGroup ?? key
+    if (seen.has(kpiKey)) continue
+    seen.add(kpiKey)
 
-    const peers = Object.entries(settings)
-      .filter(([, c]) => (c.kpiGroup ?? c.priority.toString()) === key || (cfg.kpiGroup && c.kpiGroup === cfg.kpiGroup))
-      .map(([k]) => k as IncidentCategory)
+    // Collect all group keys that share this kpiGroup
+    const peerKeys = cfg.kpiGroup
+      ? Object.entries(settings.groups)
+          .filter(([, c]) => c.kpiGroup === cfg.kpiGroup)
+          .map(([k]) => k)
+      : [key]
 
-    const count = incidents.filter(i => peers.includes(i.category)).length
+    const count = incidents.filter(i => {
+      const effective = i.displayGroup ?? i.category
+      return peerKeys.includes(effective)
+    }).length
+
     rows.push({
       label: cfg.displayName,
       count,

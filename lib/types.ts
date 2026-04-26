@@ -193,6 +193,7 @@ export interface Incident {
   hasFiles?:          boolean
   responderInitials?: string[]  // parsed from action_code field
   equipment?: string            // equipment / asset identifier (infrastructure incidents)
+  displayGroup?: string         // user-configured group key (custom groups from settings)
 }
 
 export interface IncidentEvent {

@@ -19,6 +19,7 @@ import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser
 import { generatePDF } from '@/lib/pdfGenerator'
 import { isSupabaseConfigured, upsertReportData, fetchHistoricalData } from '@/lib/supabaseClient'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
+import { readCategorySettings } from '@/lib/categorySettings'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -147,7 +148,7 @@ function UploadStep({ onComplete }: {
       setProgress('Parsing incidents…')
       const { period, date } = extractPeriod(rawText || parseSource)
       const createdBy  = extractCreatedBy(rawText || parseSource)
-      const incidents  = parseCCILText(parseSource)
+      const incidents  = parseCCILText(parseSource, readCategorySettings().labelOverrides)
       setProgress(`Done — ${incidents.length} incidents extracted`)
       onComplete({ period, date, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {

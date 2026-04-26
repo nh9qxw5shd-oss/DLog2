@@ -322,3 +322,27 @@ export async function fetchHistoricalData(
     windowDays,
   }
 }
+
+// ─── App settings (global) ────────────────────────────────────────────────────
+
+const APP_SETTINGS_KEY = 'category-settings'
+
+export async function saveAppSettings(data: unknown): Promise<void> {
+  const sb = getClient()
+  if (!sb) return
+  await sb
+    .from('app_settings')
+    .upsert({ key: APP_SETTINGS_KEY, value: data, updated_at: new Date().toISOString() })
+}
+
+export async function loadAppSettings(): Promise<unknown | null> {
+  const sb = getClient()
+  if (!sb) return null
+  const { data, error } = await sb
+    .from('app_settings')
+    .select('value')
+    .eq('key', APP_SETTINGS_KEY)
+    .maybeSingle()
+  if (error) return null
+  return data?.value ?? null
+}
