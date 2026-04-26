@@ -45,7 +45,7 @@ const SEVERITY_RULES: Array<[IncidentCategory[], Severity]> = [
 // The CCIL type field in exports contains: "<code> <label>", e.g. "07b Level Crossing Deliberate Misuse".
 // classifyByTypeLabel strips the code and looks up the label directly.
 
-const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
+export const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
   // Safety critical
   ['Signals Passed At Danger (Category A)',                              'SPAD'],
   ['Signals Passed At Danger (Category A) (Weather Related)',            'SPAD'],
@@ -408,6 +408,7 @@ function parseIncidentBlock(
   let eventHeaderSeen = false
 
   // ── Extended capture fields ────────────────────────────────────────────────
+  let equipment      = ''   // equipment / asset identifier for infrastructure incidents
   let routeLine      = ''   // railway line direction e.g. "Down Fast"
   let possessionRef  = ''
   let thirdPartyRef  = ''
@@ -471,6 +472,13 @@ function parseIncidentBlock(
       const candidate = cells[1]?.trim() || ''
       if (candidate && !/^possession ref/i.test(candidate)) routeLine = candidate
       possessionRef = cells[3] || ''
+      continue
+    }
+
+    // Equipment / asset row: | **Equipment:** | Track Circuit 55A-B | **Fault Code:** | ... |
+    if (!equipment && cells.length > 0 && /equipment|asset\b/i.test(line)) {
+      const valCell = cells.find(c => c && !/^(equipment|asset)/i.test(c) && !/^fault\s*code/i.test(c))
+      if (valCell) equipment = valCell.trim()
       continue
     }
 
@@ -694,6 +702,7 @@ function parseIncidentBlock(
     eventCount:        events.length,
     hasFiles:          hasFiles || undefined,
     responderInitials: responderInitials.length ? responderInitials : undefined,
+    equipment:         equipment || undefined,
   }
 }
 

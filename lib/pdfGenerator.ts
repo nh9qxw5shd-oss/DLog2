@@ -410,8 +410,6 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       { label: 'SPADs',         count: first.filter(i => i.category === 'SPAD').length,              urgent: true  },
       { label: 'TPWS',          count: first.filter(i => i.category === 'TPWS').length,              urgent: false },
       { label: 'Near Misses',   count: first.filter(i => i.category === 'NEAR_MISS').length,        urgent: false },
-      { label: 'Bridge Strikes',count: first.filter(i => i.category === 'BRIDGE_STRIKE').length,    urgent: true  },
-      { label: 'Fires',         count: first.filter(i => i.category === 'FIRE').length,              urgent: true  },
       { label: 'Crime/Trespass',count: first.filter(i => i.category === 'CRIME').length,            urgent: false },
       { label: 'Irr. Working',  count: first.filter(i => i.category === 'IRREGULAR_WORKING').length,urgent: false },
     ]

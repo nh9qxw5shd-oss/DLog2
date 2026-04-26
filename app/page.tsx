@@ -944,7 +944,7 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
 
       <div className="flex items-center justify-between pt-1 pl-5">
         <div className="flex items-center gap-3 text-xs font-mono">
-          <span style={{ color: cat.color }}>{cat.shortLabel}</span>
+          <span style={{ color: cat.color }}>{incident.incidentTypeLabel || cat.shortLabel}</span>
           {incident.isContinuation
             ? (incident.delayDelta ?? 0) > 0
               ? <span className="text-[#F39C12]">+{(incident.delayDelta!).toLocaleString()} min additional delay</span>
@@ -1204,10 +1204,12 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
     { l: 'Highlighted',      v: highlights.length },
     { l: 'Total delay',      v: `${totalDelay.toLocaleString()} min` },
     { l: 'Cancellations',    v: totalCan },
-    { l: 'Person Struck',    v: log.incidents.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length },
-    { l: 'SPADs',            v: log.incidents.filter(i => i.category === 'SPAD').length },
-    { l: 'Fires',            v: log.incidents.filter(i => i.category === 'FIRE').length },
-    { l: 'Crime / Trespass', v: log.incidents.filter(i => i.category === 'CRIME').length },
+    { l: 'Person Struck',     v: log.incidents.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length },
+    { l: 'SPADs',             v: log.incidents.filter(i => i.category === 'SPAD').length },
+    { l: 'TPWS',              v: log.incidents.filter(i => i.category === 'TPWS').length },
+    { l: 'Near Misses',       v: log.incidents.filter(i => i.category === 'NEAR_MISS').length },
+    { l: 'Crime / Trespass',  v: log.incidents.filter(i => i.category === 'CRIME').length },
+    { l: 'Irregular Working', v: log.incidents.filter(i => i.category === 'IRREGULAR_WORKING').length },
   ]
 
   return (
@@ -1334,6 +1336,7 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <a href="/settings" className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
             <span className="pulse-dot w-2 h-2 rounded-full bg-[#27AE60] inline-block" />
             <LiveClock />
           </div>

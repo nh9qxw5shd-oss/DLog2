@@ -192,6 +192,7 @@ export interface Incident {
   eventCount?:        number    // number of log events (complexity proxy)
   hasFiles?:          boolean
   responderInitials?: string[]  // parsed from action_code field
+  equipment?: string            // equipment / asset identifier (infrastructure incidents)
 }
 
 export interface IncidentEvent {
