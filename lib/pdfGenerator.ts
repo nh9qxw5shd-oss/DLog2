@@ -523,9 +523,12 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
       const titleLines = doc.splitTextToSize(inc.title, W - M*2 - 32)
       tx(titleLines.slice(0, 2), M + 5, y + 14.5)
 
-      // Description snippet
-      if (inc.description) {
-        const desc = inc.description.length > 170 ? inc.description.slice(0, 170) + '…' : inc.description
+      // Description snippet — prefer narrative text, fall back to incident type label
+      const snippetText = (inc.description && inc.description !== inc.title)
+        ? inc.description
+        : inc.incidentTypeLabel || ''
+      if (snippetText) {
+        const desc = snippetText.length > 170 ? snippetText.slice(0, 170) + '…' : snippetText
         sf('normal', 7.4); stc(C.darkGray)
         const dl = doc.splitTextToSize(desc, W - M*2 - 10)
         tx(dl.slice(0, 2), M + 5, y + 22.5)

@@ -635,7 +635,7 @@ function parseIncidentBlock(
 
   // ── Best description ───────────────────────────────────────────────────────
   const nrEvent = events.find(e => e.company === 'NR' && e.description.length > 50)
-  const description = (nrEvent || events[0])?.description?.replace(/\s+/g, ' ').trim() || title
+  const description = (nrEvent || events[0])?.description?.replace(/\s+/g, ' ').trim() || ''
 
   // ── Highlight flag — assigned in parseCCILText after all incidents are known ──
   const isHighlight = false
