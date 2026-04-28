@@ -80,21 +80,25 @@ export function splitCCILByPeriod(
   if (headers.length === 0) return []
 
   // For each header, collect the block of lines up to the next header,
-  // then group those blocks by period date. This handles non-contiguous
-  // periods correctly (e.g. out-of-order incident timestamps).
-  const periodBlocks = new Map<string, string[]>()
+  // then group those blocks by period date. Plain object + order array
+  // avoids Map iteration, which requires downlevelIteration under ES5 target.
+  const periodOrder: string[] = []
+  const periodBlockMap: Record<string, string[]> = {}
   for (let h = 0; h < headers.length; h++) {
     const { lineIdx, periodDate } = headers[h]
     const nextLineIdx = h + 1 < headers.length ? headers[h + 1].lineIdx : lines.length
     const block = lines.slice(lineIdx, nextLineIdx).join('\n')
-    if (!periodBlocks.has(periodDate)) periodBlocks.set(periodDate, [])
-    periodBlocks.get(periodDate)!.push(block)
+    if (!periodBlockMap[periodDate]) {
+      periodOrder.push(periodDate)
+      periodBlockMap[periodDate] = []
+    }
+    periodBlockMap[periodDate].push(block)
   }
 
   // Parse each period's accumulated blocks using the existing unmodified parser
   const results: PeriodSlice[] = []
-  for (const [date, blocks] of periodBlocks) {
-    const text = blocks.join('\n')
+  for (const date of periodOrder) {
+    const text = periodBlockMap[date].join('\n')
     const incidents = parseCCILText(text, labelOverrides, groupSeverities)
     results.push({ date, period: periodString(date), incidents })
   }
