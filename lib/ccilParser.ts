@@ -718,9 +718,11 @@ const BUILT_IN_CATS = new Set<string>([
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /** @param labelOverrides - normalized CCIL label → group key from user settings */
+/** @param groupSeverities - group key → user-configured Severity (overrides SEVERITY_RULES) */
 export function parseCCILText(
   rawText: string,
-  labelOverrides: Record<string, string> = {}
+  labelOverrides: Record<string, string> = {},
+  groupSeverities: Record<string, Severity> = {}
 ): Incident[] {
   const lines = rawText.split('\n')
   const incidents: Incident[] = []
@@ -770,6 +772,22 @@ export function parseCCILText(
           incident.category = 'GENERAL'
         }
       }
+    }
+
+    // Apply user-configured severity (overrides SEVERITY_RULES), then re-apply
+    // delay escalation on top so high-impact incidents are never under-reported.
+    const effectiveGroupKey = incident.displayGroup ?? incident.category
+    const userSev = groupSeverities[effectiveGroupKey]
+    if (userSev !== undefined) {
+      const SEV_ORDER: Severity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+      const escalate = (cur: Severity, tgt: Severity): Severity =>
+        SEV_ORDER.indexOf(tgt) > SEV_ORDER.indexOf(cur) ? tgt : cur
+      let sev = userSev
+      const delay = incident.minutesDelay || 0
+      if (delay > 2000)      sev = escalate(sev, 'CRITICAL')
+      else if (delay > 1000) sev = escalate(sev, 'HIGH')
+      else if (delay > 500)  sev = escalate(sev, 'MEDIUM')
+      incident.severity = sev
     }
 
     // Drop pure noise: GENERAL/INFO with no disruption data and <=1 event

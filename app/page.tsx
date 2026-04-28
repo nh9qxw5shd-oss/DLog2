@@ -148,7 +148,11 @@ function UploadStep({ onComplete }: {
       setProgress('Parsing incidents…')
       const { period, date } = extractPeriod(rawText || parseSource)
       const createdBy  = extractCreatedBy(rawText || parseSource)
-      const incidents  = parseCCILText(parseSource, readCategorySettings().labelOverrides)
+      const catSettings = readCategorySettings()
+      const groupSeverities = Object.fromEntries(
+        Object.entries(catSettings.groups).map(([k, v]) => [k, v.severity])
+      )
+      const incidents  = parseCCILText(parseSource, catSettings.labelOverrides, groupSeverities)
       setProgress(`Done — ${incidents.length} incidents extracted`)
       onComplete({ period, date, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {
