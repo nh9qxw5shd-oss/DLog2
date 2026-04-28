@@ -32,8 +32,9 @@ const MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','
 const SAFETY_CATS = [
   { key: 'SPAD',          label: 'SPAD',          color: '#E05206' },
   { key: 'TPWS',          label: 'TPWS',          color: '#F39C12' },
-  { key: 'NEAR_MISS',     label: 'Near Miss',     color: '#F1C40F' },
-  { key: 'PERSON_STRUCK', label: 'Person Struck', color: '#E74C3C' },
+  { key: 'NEAR_MISS',          label: 'Near Miss',          color: '#F1C40F' },
+  { key: 'IRREGULAR_WORKING', label: 'Irregular Working',  color: '#E67E22' },
+  { key: 'PERSON_STRUCK',     label: 'Person Struck',      color: '#E74C3C' },
   { key: 'FATALITY',      label: 'Fatality',      color: '#C0392B' },
 ]
 
