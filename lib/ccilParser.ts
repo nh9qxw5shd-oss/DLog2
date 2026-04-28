@@ -790,6 +790,11 @@ export function parseCCILText(
       incident.severity = sev
     }
 
+    // Any recorded delay floors severity at LOW — INFO is for zero-disruption entries only
+    if ((incident.minutesDelay || 0) > 0 && incident.severity === 'INFO') {
+      incident.severity = 'LOW'
+    }
+
     // Drop pure noise: GENERAL/INFO with no disruption data and <=1 event
     // These are administrative entries that slipped through the title filter
     const isNoise = incident.category === 'GENERAL'
