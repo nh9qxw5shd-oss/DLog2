@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { LogState, CATEGORY_CONFIG, IncidentCategory } from './types'
+import { LogState, Incident, CATEGORY_CONFIG, IncidentCategory } from './types'
 import { backfillAreasByLocation, reapplyHighlights } from './ccilParser'
 
 // ─── Client singleton ─────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ export async function annotateWithContinuations(log: LogState): Promise<LogState
     }
   }
 
-  let incidents = log.incidents.map(inc => {
+  let incidents: Incident[] = log.incidents.map(inc => {
     if (inc.ccil && priorByccil.has(inc.ccil)) {
       const prevDelay = priorByccil.get(inc.ccil)!
       const delta = Math.max(0, (inc.minutesDelay ?? 0) - prevDelay)
