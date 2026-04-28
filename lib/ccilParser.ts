@@ -51,7 +51,7 @@ export const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
   ['Signals Passed At Danger (Category A) (Weather Related)',            'SPAD'],
   ['TPWS Activation',                                                    'TPWS'],
   ['Near Miss',                                                          'NEAR_MISS'],
-  ['Concern For Welfare',                                                'NEAR_MISS'],
+  ['Concern For Welfare',                                                'GENERAL'],
   ['Train Struck an Object',                                             'NEAR_MISS'],
   ['Road Vehicle Incursion (non Level Crossing).',                       'NEAR_MISS'],
   ['Fatality',                                                           'FATALITY'],
@@ -764,7 +764,10 @@ export function parseCCILText(
           }
           incident.severity = newSev
         } else {
+          // Custom group: set displayGroup and move category to GENERAL so the
+          // incident doesn't remain in whichever built-in section it was parsed into
           incident.displayGroup = groupKey
+          incident.category = 'GENERAL'
         }
       }
     }

@@ -1203,7 +1203,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
 
       // 4. Build and download PDF (with charts if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(pdfLog, chartImages)
+      await generatePDF(pdfLog, chartImages, readCategorySettings())
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')

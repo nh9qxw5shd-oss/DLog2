@@ -6,6 +6,7 @@ import {
   SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
 } from './types'
 import type { ChartImages } from './chartRenderer'
+import type { CategorySettings } from './categorySettings'
 
 export type { ChartImages }
 
@@ -107,7 +108,7 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function generatePDF(log: LogState, chartImages?: ChartImages): Promise<void> {
+export async function generatePDF(log: LogState, chartImages?: ChartImages, categorySettings?: CategorySettings): Promise<void> {
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
@@ -631,6 +632,69 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages): Pro
     })
 
     y = getAutoY() + 8
+  }
+
+  // ── 5b. Custom group sections ──────────────────────────────────────────────
+  // Render one table per custom group key that has incidents, using the
+  // displayName from settings when available.
+  if (categorySettings) {
+    const customKeys = categorySettings.customGroupKeys
+    for (const key of customKeys) {
+      const items = log.incidents.filter(i => i.displayGroup === key)
+      if (items.length === 0) continue
+      const cfg = categorySettings.groups[key]
+      const label = cfg?.displayName?.toUpperCase() ?? key.replace(/_/g, ' ')
+      checkPage(22)
+      sectionHead(label, `${items.length} incident${items.length !== 1 ? 's' : ''}`)
+      const tableBody = items.map(i => {
+        let delayCell = '—'
+        if (i.isContinuation) {
+          const delta = i.delayDelta ?? 0
+          delayCell = delta > 0
+            ? `+${delta.toLocaleString()} (c/o)`
+            : (i.minutesDelay || 0) > 0 ? `${i.minutesDelay!.toLocaleString()} (c/o)` : '— (c/o)'
+        } else if ((i.minutesDelay || 0) > 0) {
+          delayCell = i.minutesDelay!.toLocaleString()
+        }
+        return [
+          i.ccil || '—',
+          i.location || '—',
+          i.incidentStart || '—',
+          i.isContinuation
+            ? (i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`)
+            : (i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title),
+          delayCell,
+          (i.cancelled || 0) > 0 ? String(i.cancelled) : '—',
+          i.severity,
+        ]
+      })
+      autoTable(doc, {
+        startY: y,
+        head:   [['CCIL', 'Location', 'Time', 'Incident', 'Delay (min)', 'Cancelled', 'Sev']],
+        body:   tableBody,
+        margin: { left: M, right: M },
+        theme:  'grid',
+        headStyles:         { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 2.5 },
+        bodyStyles:         { fontSize: 6.5, textColor: C.darkGray, cellPadding: 2 },
+        alternateRowStyles: { fillColor: C.offWhite },
+        columnStyles: {
+          0: { cellWidth: 18 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 14 },
+          3: { cellWidth: 'auto' },
+          4: { cellWidth: 18, halign: 'right' as const },
+          5: { cellWidth: 18, halign: 'right' as const },
+          6: { cellWidth: 13 },
+        },
+        didParseCell: (data: any) => {
+          if (data.section === 'body' && data.column.index === 6) {
+            data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.midGray
+            data.cell.styles.fontStyle = 'bold'
+          }
+        },
+      })
+      y = getAutoY() + 8
+    }
   }
 
   // ── 6. Disruption impact ranked table ─────────────────────────────────────
