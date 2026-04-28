@@ -66,8 +66,8 @@ export const CCIL_LABEL_MAP: Array<[string, IncidentCategory]> = [
   ['Irregular Working : TOC',                                            'IRREGULAR_WORKING'],
   ['Dispatch Incidents',                                                 'IRREGULAR_WORKING'],
   ['Incorrect Door Release',                                             'IRREGULAR_WORKING'],
-  ['Group Standard GE/RT3350',                                           'IRREGULAR_WORKING'],
-  ['Group Standard GE/RT8250',                                           'IRREGULAR_WORKING'],
+  ['Group Standard GE/RT3350',                                           'TRAIN_FAULT'],
+  ['Group Standard GE/RT8250',                                           'TRAIN_FAULT'],
   ['Missed Power Changeover',                                            'IRREGULAR_WORKING'],
   ['Speeding',                                                           'IRREGULAR_WORKING'],
   // HABD/WILD
