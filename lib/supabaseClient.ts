@@ -252,12 +252,15 @@ export async function fetchHistoricalData(
   cutoff.setDate(cutoff.getDate() - windowDays + 1)
   const cutoffDate = cutoff.toISOString().slice(0, 10)
 
-  // Rolling window query: only incidents within the analytics window
+  // Rolling window query: only incidents within the analytics window.
+  // Explicit limit overrides PostgREST's default 1000-row cap — without it,
+  // large windows silently return only the oldest 1000 rows, dropping recent data.
   const { data: rows, error } = await sb
     .from('incidents')
     .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
     .gte('report_date', cutoffDate)
     .order('report_date', { ascending: true })
+    .limit(100_000)
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
 
