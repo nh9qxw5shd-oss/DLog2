@@ -33,7 +33,6 @@ const SAFETY_CATS = [
   { key: 'SPAD',          label: 'SPAD',          color: '#E05206' },
   { key: 'TPWS',          label: 'TPWS',          color: '#F39C12' },
   { key: 'NEAR_MISS',     label: 'Near Miss',     color: '#F1C40F' },
-  { key: 'BRIDGE_STRIKE', label: 'Bridge Strike', color: '#E67E22' },
   { key: 'PERSON_STRUCK', label: 'Person Struck', color: '#E74C3C' },
   { key: 'FATALITY',      label: 'Fatality',      color: '#C0392B' },
 ]
