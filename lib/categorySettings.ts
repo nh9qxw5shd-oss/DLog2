@@ -33,31 +33,50 @@ export type SaveStatus = 'idle' | 'saving' | 'saved-local' | 'saved-cloud' | 'er
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_GROUP_CONFIG: Record<IncidentCategory, CategoryGroupConfig> = {
-  FATALITY:          { displayName: 'Person Struck / Fatality',    shortCode: 'PST',   color: '#E74C3C', severity: 'CRITICAL', showInSummary: true,  kpiGroup: 'person-struck', priority: 1  },
-  PERSON_STRUCK:     { displayName: 'Person Struck by Train',      shortCode: 'PST',   color: '#E74C3C', severity: 'CRITICAL', showInSummary: true,  kpiGroup: 'person-struck', priority: 2  },
-  SPAD:              { displayName: 'Signal Passed at Danger',     shortCode: 'SPAD',  color: '#E05206', severity: 'HIGH',     showInSummary: true,  priority: 3  },
-  TPWS:              { displayName: 'TPWS Activation',             shortCode: 'TPWS',  color: '#E05206', severity: 'MEDIUM',   showInSummary: true,  priority: 4  },
-  IRREGULAR_WORKING: { displayName: 'Irregular Working',           shortCode: 'IRR',   color: '#F39C12', severity: 'MEDIUM',   showInSummary: true,  priority: 5  },
-  NEAR_MISS:         { displayName: 'Near Miss',                   shortCode: 'NM',    color: '#F39C12', severity: 'MEDIUM',   showInSummary: true,  priority: 6  },
-  CRIME:             { displayName: 'Crime / Trespass',            shortCode: 'CRIME', color: '#9B59B6', severity: 'MEDIUM',   showInSummary: true,  priority: 7  },
-  BRIDGE_STRIKE:     { displayName: 'Bridge Strike',               shortCode: 'BSTR',  color: '#F39C12', severity: 'HIGH',     showInSummary: false, priority: 8  },
-  HABD_WILD:         { displayName: 'HABD / WILD Activation',      shortCode: 'HABD',  color: '#F39C12', severity: 'MEDIUM',   showInSummary: false, priority: 9  },
-  LEVEL_CROSSING:    { displayName: 'Level Crossing',              shortCode: 'LC',    color: '#E05206', severity: 'MEDIUM',   showInSummary: false, priority: 10 },
-  FIRE:              { displayName: 'Fire / Lineside',             shortCode: 'FIRE',  color: '#E74C3C', severity: 'HIGH',     showInSummary: false, priority: 11 },
-  PASSENGER_INJURY:  { displayName: 'Passenger / Public Injury',   shortCode: 'PAX',   color: '#E05206', severity: 'MEDIUM',   showInSummary: false, priority: 12 },
-  DERAILMENT:        { displayName: 'Derailment / Collision',      shortCode: 'DERL',  color: '#E74C3C', severity: 'CRITICAL', showInSummary: false, priority: 13 },
-  INFRASTRUCTURE:    { displayName: 'Infrastructure Failure',      shortCode: 'INFRA', color: '#4A6FA5', severity: 'LOW',      showInSummary: false, priority: 14 },
-  TRACTION_FAILURE:  { displayName: 'OHL / Traction Failure',      shortCode: 'OLE',   color: '#4A6FA5', severity: 'MEDIUM',   showInSummary: false, priority: 15 },
-  TRAIN_FAULT:       { displayName: 'Train Fault / Failure',       shortCode: 'TFLT',  color: '#6B7FA5', severity: 'LOW',      showInSummary: false, priority: 16 },
-  POSSESSION:        { displayName: 'Possession Issue',            shortCode: 'POSS',  color: '#4A6FA5', severity: 'LOW',      showInSummary: false, priority: 17 },
-  STATION_OVERRUN:   { displayName: 'Station Overrun',             shortCode: 'OVRUN', color: '#7A8BA8', severity: 'MEDIUM',   showInSummary: false, priority: 18 },
-  STRANDED_TRAIN:    { displayName: 'Stranded Train',              shortCode: 'STRD',  color: '#7A8BA8', severity: 'INFO',     showInSummary: false, priority: 19 },
-  WEATHER:           { displayName: 'Weather Event',               shortCode: 'WX',    color: '#4A6FA5', severity: 'INFO',     showInSummary: false, priority: 20 },
-  GENERAL:           { displayName: 'General / Other',             shortCode: 'GEN',   color: '#4A6FA5', severity: 'INFO',     showInSummary: false, priority: 21 },
+  FATALITY:          { displayName: 'Fatality',                     shortCode: 'PST',   color: '#E74C3C', severity: 'MEDIUM',   showInSummary: true,  kpiGroup: 'person-struck', priority: 1  },
+  PERSON_STRUCK:     { displayName: 'Person Struck by Train',       shortCode: 'PST',   color: '#E74C3C', severity: 'MEDIUM',   showInSummary: true,  kpiGroup: 'person-struck', priority: 2  },
+  SPAD:              { displayName: 'Signal Passed at Danger',      shortCode: 'SPAD',  color: '#E05206', severity: 'MEDIUM',   showInSummary: true,  priority: 3  },
+  TPWS:              { displayName: 'TPWS Activation',              shortCode: 'TPWS',  color: '#E05206', severity: 'LOW',      showInSummary: true,  priority: 4  },
+  IRREGULAR_WORKING: { displayName: 'Irregular Working',            shortCode: 'IRR',   color: '#F39C12', severity: 'MEDIUM',   showInSummary: true,  priority: 5  },
+  NEAR_MISS:         { displayName: 'Near Miss',                    shortCode: 'NM',    color: '#F39C12', severity: 'MEDIUM',   showInSummary: true,  priority: 6  },
+  CRIME:             { displayName: 'Crime / Trespass',             shortCode: 'CRIME', color: '#9B59B6', severity: 'LOW',      showInSummary: true,  priority: 7  },
+  BRIDGE_STRIKE:     { displayName: 'Bridge Strike',                shortCode: 'BSTR',  color: '#F39C12', severity: 'LOW',      showInSummary: false, priority: 8  },
+  HABD_WILD:         { displayName: 'HABD / WILD Activation',       shortCode: 'HABD',  color: '#F39C12', severity: 'LOW',      showInSummary: false, priority: 9  },
+  LEVEL_CROSSING:    { displayName: 'Level Crossing',               shortCode: 'LC',    color: '#E05206', severity: 'LOW',      showInSummary: false, priority: 10 },
+  FIRE:              { displayName: 'Fire / Lineside',              shortCode: 'FIRE',  color: '#E74C3C', severity: 'LOW',      showInSummary: false, priority: 11 },
+  PASSENGER_INJURY:  { displayName: 'Passenger / Public Injury',    shortCode: 'PAX',   color: '#E05206', severity: 'LOW',      showInSummary: false, priority: 12 },
+  DERAILMENT:        { displayName: 'Derailment / Collision',       shortCode: 'DERL',  color: '#E74C3C', severity: 'LOW',      showInSummary: false, priority: 13 },
+  INFRASTRUCTURE:    { displayName: 'Infrastructure Failure',       shortCode: 'INFRA', color: '#4A6FA5', severity: 'LOW',      showInSummary: false, priority: 14 },
+  TRACTION_FAILURE:  { displayName: 'OHL Incident / Fault',         shortCode: 'OLE',   color: '#4A6FA5', severity: 'LOW',      showInSummary: false, priority: 15 },
+  TRAIN_FAULT:       { displayName: 'Train Fault / Failure',        shortCode: 'TFLT',  color: '#6B7FA5', severity: 'LOW',      showInSummary: false, priority: 16 },
+  POSSESSION:        { displayName: 'Possession Issue',             shortCode: 'POSS',  color: '#4A6FA5', severity: 'LOW',      showInSummary: false, priority: 17 },
+  STATION_OVERRUN:   { displayName: 'Station Overrun',              shortCode: 'OVRUN', color: '#7A8BA8', severity: 'LOW',      showInSummary: false, priority: 18 },
+  STRANDED_TRAIN:    { displayName: 'Stranded Train',               shortCode: 'STRD',  color: '#7A8BA8', severity: 'INFO',     showInSummary: false, priority: 19 },
+  WEATHER:           { displayName: 'Weather',                      shortCode: 'WX',    color: '#4A6FA5', severity: 'INFO',     showInSummary: false, priority: 20 },
+  GENERAL:           { displayName: 'General / Other',              shortCode: 'GEN',   color: '#4A6FA5', severity: 'INFO',     showInSummary: false, priority: 21 },
 }
 
 function defaultSettings(): CategorySettings {
-  return { version: 1, groups: { ...DEFAULT_GROUP_CONFIG }, labelOverrides: {}, customGroupKeys: [] }
+  return {
+    version: 1,
+    groups: {
+      ...DEFAULT_GROUP_CONFIG,
+      CONCERN_FOR_WELFARE: { displayName: 'Concern For Welfare', shortCode: 'CONCE', color: '#9f59b6', severity: 'LOW', showInSummary: false, isCustom: true, priority: 22 },
+    },
+    labelOverrides: {
+      'concern for welfare':                                          'CONCERN_FOR_WELFARE',
+      'train struck an object':                                       'INFRASTRUCTURE',
+      'road vehicle incursion (non level crossing).':                 'GENERAL',
+      'graffiti':                                                     'GENERAL',
+      'unsecured access gate':                                        'GENERAL',
+      'bridge/structural defects or incidents (ex. bridge strikes)':  'INFRASTRUCTURE',
+      'level crossing deliberate misuse':                             'CRIME',
+      'stopping incidents':                                           'IRREGULAR_WORKING',
+      'traction failure passenger':                                   'TRAIN_FAULT',
+      'traction failure non-passenger':                               'TRAIN_FAULT',
+    },
+    customGroupKeys: ['CONCERN_FOR_WELFARE'],
+  }
 }
 
 // ─── LocalStorage helpers ─────────────────────────────────────────────────────
