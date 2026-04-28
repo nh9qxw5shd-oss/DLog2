@@ -1,7 +1,8 @@
 'use client'
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { LogState, CATEGORY_CONFIG, IncidentCategory } from './types'
+import { LogState, Incident, CATEGORY_CONFIG, IncidentCategory } from './types'
+import { backfillAreasByLocation, reapplyHighlights } from './ccilParser'
 
 // ─── Client singleton ─────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export async function annotateWithContinuations(log: LogState): Promise<LogState
     }
   }
 
-  const incidents = log.incidents.map(inc => {
+  let incidents: Incident[] = log.incidents.map(inc => {
     if (inc.ccil && priorByccil.has(inc.ccil)) {
       const prevDelay = priorByccil.get(inc.ccil)!
       const delta = Math.max(0, (inc.minutesDelay ?? 0) - prevDelay)
@@ -94,6 +95,42 @@ export async function annotateWithContinuations(log: LogState): Promise<LogState
     }
     return { ...inc, isContinuation: false, delayDelta: undefined }
   })
+
+  // Backfill any null area codes from historical records for the same location
+  const locationsNeedingArea = incidents
+    .filter(inc => !inc.area && inc.location && inc.location !== 'Unknown')
+    .map(inc => inc.location)
+
+  if (locationsNeedingArea.length > 0) {
+    const { data: areaRows } = await sb
+      .from('incidents')
+      .select('location, area')
+      .in('location', locationsNeedingArea)
+      .not('area', 'is', null)
+      .limit(500)
+
+    const dbLocationToArea = new Map<string, string>()
+    for (const row of areaRows ?? []) {
+      if (row.location && row.area && !dbLocationToArea.has(row.location)) {
+        dbLocationToArea.set(row.location, row.area)
+      }
+    }
+
+    if (dbLocationToArea.size > 0) {
+      incidents = incidents.map(inc => {
+        if (!inc.area && inc.location && dbLocationToArea.has(inc.location)) {
+          return { ...inc, area: dbLocationToArea.get(inc.location) }
+        }
+        return inc
+      })
+    }
+  }
+
+  // Within-document: locations that gained an area from DB can now help others
+  incidents = backfillAreasByLocation(incidents)
+
+  // Re-evaluate highlights now that continuation status and delayDelta are set
+  incidents = reapplyHighlights(incidents)
 
   return { ...log, incidents }
 }

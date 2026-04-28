@@ -845,7 +845,56 @@ export function parseCCILText(
     .forEach(i => highlighted.add(i.id))
   incidents.forEach(i => { i.isHighlight = highlighted.has(i.id) })
 
-  return incidents
+  return backfillAreasByLocation(incidents)
+}
+
+// ─── Area backfill ────────────────────────────────────────────────────────────
+// Incidents at the same physical location always carry the same area code.
+// Build a location→area map from incidents that were parsed with one, then fill
+// the gaps. Works both within a single document and as a post-annotation pass
+// (e.g. after DB-sourced area codes are injected by supabaseClient).
+
+export function backfillAreasByLocation(incidents: Incident[]): Incident[] {
+  const locationToArea = new Map<string, string>()
+  for (const inc of incidents) {
+    if (inc.area && inc.location) {
+      locationToArea.set(inc.location.toLowerCase(), inc.area)
+    }
+  }
+  if (locationToArea.size === 0) return incidents
+  return incidents.map(inc => {
+    if (!inc.area && inc.location) {
+      const found = locationToArea.get(inc.location.toLowerCase())
+      if (found) return { ...inc, area: found }
+    }
+    return inc
+  })
+}
+
+// ─── Highlight reapplication ──────────────────────────────────────────────────
+// The initial parse runs auto-highlight before continuation status is known.
+// After annotateWithContinuations() runs, call this so carried-over incidents
+// compete on their incremental delay (delayDelta) rather than their cumulative
+// total — preventing a multi-day incident from outranking today's new events.
+
+export function reapplyHighlights(incidents: Incident[]): Incident[] {
+  const highlighted = new Set<string>()
+  // Tier 1: always highlight safety-critical regardless of delay
+  incidents
+    .filter(i => i.severity === 'CRITICAL' || i.severity === 'HIGH')
+    .forEach(i => highlighted.add(i.id))
+  // Tier 2: top 5 by *effective* delay — delta for continuations, full for new
+  incidents
+    .filter(i => !highlighted.has(i.id))
+    .map(i => ({
+      id:  i.id,
+      eff: i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay ?? 0),
+    }))
+    .filter(x => x.eff > 100)
+    .sort((a, b) => b.eff - a.eff)
+    .slice(0, 5)
+    .forEach(x => highlighted.add(x.id))
+  return incidents.map(i => ({ ...i, isHighlight: highlighted.has(i.id) }))
 }
 
 // ─── Metadata ─────────────────────────────────────────────────────────────────
