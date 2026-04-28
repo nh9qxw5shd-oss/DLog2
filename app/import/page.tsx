@@ -3,8 +3,7 @@
 import React, { useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Upload, Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Database } from 'lucide-react'
-import { splitCCILByPeriod, makeHistoricLogState, PeriodSlice } from '@/lib/bulkImport'
-import { extractCreatedBy } from '@/lib/ccilParser'
+import { parseCCILCSV, makeHistoricLogState, PeriodSlice } from '@/lib/bulkImport'
 import { upsertReportData, isSupabaseConfigured } from '@/lib/supabaseClient'
 import { readCategorySettings } from '@/lib/categorySettings'
 
@@ -24,24 +23,6 @@ interface RowResult {
 
 function cn(...cls: (string | false | undefined | null)[]) {
   return cls.filter(Boolean).join(' ')
-}
-
-// Converts HTML table rows from mammoth output to pipe-delimited markdown —
-// identical logic to app/page.tsx so both feeds produce the same parse source.
-function htmlToTableText(html: string): string {
-  const doc = new DOMParser().parseFromString(html, 'text/html')
-  const lines: string[] = []
-  doc.querySelectorAll('tr').forEach((row) => {
-    const cells = Array.from(row.querySelectorAll('th,td'))
-    if (!cells.length) return
-    const values = cells.map((cell) => {
-      const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
-      const hasBold = !!cell.querySelector('strong, b')
-      return hasBold && text ? `**${text}**` : text
-    })
-    lines.push(`| ${values.join(' | ')} |`)
-  })
-  return lines.join('\n')
 }
 
 function formatDate(iso: string): string {
@@ -79,39 +60,31 @@ export default function ImportPage() {
   // ── Parse uploaded file ────────────────────────────────────────────────────
 
   const processFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.docx')) {
-      setParseError('Only .docx files are supported.')
+    if (!file.name.endsWith('.csv')) {
+      setParseError('Only .csv files are supported.')
       return
     }
     setParseError('')
     setPhase('parsing')
 
     try {
-      const mammoth = await import('mammoth')
-      const buf = await file.arrayBuffer()
-      const [{ value: htmlText }, { value: rawText }] = await Promise.all([
-        mammoth.convertToHtml({ arrayBuffer: buf }),
-        mammoth.extractRawText({ arrayBuffer: buf }),
-      ])
-      const tableText = htmlText ? htmlToTableText(htmlText) : ''
-      const parseSource = tableText.trim() ? tableText : rawText
+      const csvText = await file.text()
 
       const catSettings     = readCategorySettings()
       const groupSeverities = Object.fromEntries(
         Object.entries(catSettings.groups).map(([k, v]) => [k, v.severity])
       )
 
-      const slices = splitCCILByPeriod(parseSource, catSettings.labelOverrides, groupSeverities)
-      const author = extractCreatedBy(rawText || parseSource) || undefined
+      const slices = parseCCILCSV(csvText, catSettings.labelOverrides, groupSeverities)
 
       if (slices.length === 0) {
-        setParseError('No incidents found. Check the file contains CCIL incident tables.')
+        setParseError('No incidents found. Check the file is a valid CCIL CSV export.')
         setPhase('idle')
         return
       }
 
       setPeriods(slices)
-      setCreatedBy(author)
+      setCreatedBy(undefined)
       setRows(slices.map(s => ({
         date:   s.date,
         period: s.period,
@@ -231,18 +204,18 @@ export default function ImportPage() {
             onDrop={onDrop}
             onClick={() => fileInputRef.current?.click()}
           >
-            <input ref={fileInputRef} type="file" accept=".docx" className="hidden" onChange={onFileChange} />
+            <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={onFileChange} />
             {phase === 'parsing' ? (
               <>
                 <Loader2 size={32} className="text-[#E05206] animate-spin" />
-                <p className="text-sm text-[#7A8BA8]">Parsing document and splitting into periods…</p>
+                <p className="text-sm text-[#7A8BA8]">Parsing CSV and splitting into periods…</p>
               </>
             ) : (
               <>
                 <Upload size={32} className="text-[#4A6FA5]" />
                 <div className="text-center">
-                  <p className="text-sm text-[#E8EDF5] font-medium">Drop your CCIL export here</p>
-                  <p className="text-xs text-[#7A8BA8] mt-1">or click to browse · .docx files only</p>
+                  <p className="text-sm text-[#E8EDF5] font-medium">Drop your CCIL CSV export here</p>
+                  <p className="text-xs text-[#7A8BA8] mt-1">or click to browse · .csv files only</p>
                 </div>
               </>
             )}
