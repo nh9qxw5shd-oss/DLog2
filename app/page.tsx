@@ -930,6 +930,11 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
             <p className="text-white text-sm font-medium leading-snug line-clamp-2">{incident.title}</p>
             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               {incident.location && <span className="text-xs text-[#7A8BA8] font-mono">{incident.location}</span>}
+              {incident.area && (
+                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[rgba(74,111,165,0.12)] border border-[rgba(74,111,165,0.3)] text-[#4A6FA5]" title="Area code from CCIL">
+                  {incident.area}
+                </span>
+              )}
               {incident.ccil     && <span className="text-xs text-[#4A5A72] font-mono">CCIL {incident.ccil}</span>}
               {incident.incidentStart && <span className="text-xs text-[#4A5A72] font-mono">{incident.incidentStart}</span>}
               {incident.isContinuation && (
@@ -1013,6 +1018,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
     totalMins:  log.incidents.reduce((s, i) =>
       s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0),
     totalCan:   log.incidents.reduce((s, i) => s + (i.cancelled    || 0), 0),
+    withArea:   log.incidents.filter(i => !!i.area).length,
   }
 
   const toggle = (id: string, field: keyof Incident) =>
@@ -1048,13 +1054,14 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
       </div>
 
       {/* KPI stats bar */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
         {[
-          { label: 'Total',         value: stats.total,                         color: '#4A6FA5' },
-          { label: 'Highlighted',   value: stats.highlights,                    color: '#E05206' },
-          { label: 'Critical/High', value: stats.critical,                      color: '#C0392B' },
-          { label: 'Delay (min)',   value: stats.totalMins.toLocaleString(),    color: '#F39C12' },
-          { label: 'Cancelled',     value: stats.totalCan,                      color: '#E05206' },
+          { label: 'Total',         value: stats.total,                                                               color: '#4A6FA5' },
+          { label: 'Highlighted',   value: stats.highlights,                                                          color: '#E05206' },
+          { label: 'Critical/High', value: stats.critical,                                                            color: '#C0392B' },
+          { label: 'Delay (min)',   value: stats.totalMins.toLocaleString(),                                          color: '#F39C12' },
+          { label: 'Cancelled',     value: stats.totalCan,                                                            color: '#E05206' },
+          { label: 'Area codes',    value: `${stats.withArea}/${log.incidents.length}`,                               color: stats.withArea === log.incidents.length ? '#27AE60' : stats.withArea === 0 ? '#C0392B' : '#F39C12' },
         ].map(s => (
           <div key={s.label} className="card p-3 text-center">
             <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
