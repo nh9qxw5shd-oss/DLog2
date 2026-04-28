@@ -146,14 +146,6 @@ export async function upsertReportData(log: LogState): Promise<void> {
 
   const reportId = reportRow.id
 
-  // Remove any previously stored incidents for this report, then re-insert fresh
-  const { error: delErr } = await sb
-    .from('incidents')
-    .delete()
-    .eq('report_id', reportId)
-
-  if (delErr) throw new Error(`Incident clear failed: ${delErr.message}`)
-
   if (annotated.length === 0) return
 
   const rows = annotated.map(inc => {
@@ -223,6 +215,27 @@ export async function upsertReportData(log: LogState): Promise<void> {
     }
   })
 
+  // CCIL-aware additive upsert: only replace incidents that are in this upload.
+  // Incidents from prior uploads not covered by this batch are left untouched,
+  // so re-running a period never duplicates data or loses unrelated rows.
+  const incomingCcils = rows.filter(r => r.ccil).map(r => r.ccil as string)
+  if (incomingCcils.length > 0) {
+    const { error: delCciledErr } = await sb
+      .from('incidents')
+      .delete()
+      .eq('report_id', reportId)
+      .in('ccil', incomingCcils)
+    if (delCciledErr) throw new Error(`Incident ccil-clear failed: ${delCciledErr.message}`)
+  }
+  const hasUncciledRows = rows.some(r => !r.ccil)
+  if (hasUncciledRows) {
+    const { error: delUncciledErr } = await sb
+      .from('incidents')
+      .delete()
+      .eq('report_id', reportId)
+      .is('ccil', null)
+    if (delUncciledErr) throw new Error(`Incident null-clear failed: ${delUncciledErr.message}`)
+  }
   const { error: insErr } = await sb.from('incidents').insert(rows)
   if (insErr) throw new Error(`Incident insert failed: ${insErr.message}`)
 }
@@ -239,12 +252,15 @@ export async function fetchHistoricalData(
   cutoff.setDate(cutoff.getDate() - windowDays + 1)
   const cutoffDate = cutoff.toISOString().slice(0, 10)
 
-  // Rolling window query: only incidents within the analytics window
+  // Rolling window query: only incidents within the analytics window.
+  // Explicit limit overrides PostgREST's default 1000-row cap — without it,
+  // large windows silently return only the oldest 1000 rows, dropping recent data.
   const { data: rows, error } = await sb
     .from('incidents')
     .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
     .gte('report_date', cutoffDate)
     .order('report_date', { ascending: true })
+    .limit(100_000)
 
   if (error) throw new Error(`Historical fetch failed: ${error.message}`)
 

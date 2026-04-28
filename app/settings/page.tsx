@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Check, ChevronDown, ChevronRight, Plus, Trash2,
-  RotateCcw, Cloud, Download, X, Loader2, AlertCircle,
+  RotateCcw, Cloud, Download, X, Loader2, AlertCircle, Database,
 } from 'lucide-react'
 import { Severity } from '@/lib/types'
 import {
@@ -458,6 +458,9 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center gap-4">
             <StatusBadge status={saveStatus} />
+            <Link href="/import" className="flex items-center gap-1.5 text-xs text-[#7A8BA8] hover:text-white transition-colors font-mono">
+              <Database size={12} /> Historical Import
+            </Link>
             <Link href="/" className="flex items-center gap-1.5 text-xs text-[#7A8BA8] hover:text-white transition-colors font-mono">
               <ArrowLeft size={12} /> Back to Report Generator
             </Link>
