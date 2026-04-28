@@ -482,12 +482,30 @@ function parseIncidentBlock(
       continue
     }
 
-    // Area / Action / BTP: | **Area: ** | **Action: ** MB | **BTP Ref:** | 392 |
+    // Area / Action / BTP row.
+    // Two formats appear in the wild:
+    //   Inline:      | **Area:** E - EM - Bedford | **Action:** MB | **BTP Ref:** | 392 |
+    //   Alternating: | **Area:** | E - EM - Bedford | **Action:** | MB | **BTP Ref:** | 392 |
     if (cells.length > 0 && line.includes('Area:') && line.includes('Action:')) {
-      area = cells[0].replace(/^Area:\s*/i, '').trim()
-      action = cells[1].replace(/^Action:\s*/i, '').trim()
-      const btpM = cells[3]?.match(/^(\d+)/)
-      btpRef = btpM ? btpM[1] : ''
+      const fromCell0 = cells[0].replace(/^Area:\s*/i, '').trim()
+      if (fromCell0) {
+        // Inline format — value sits in the same cell as the label
+        area   = fromCell0
+        action = cells[1].replace(/^Action:\s*/i, '').trim()
+        const btpM = cells[3]?.match(/^(\d+)/)
+        btpRef = btpM ? btpM[1] : ''
+      } else if (cells[2] && /^action/i.test(cells[2])) {
+        // Alternating label/value format — cells[1] holds the area value
+        area   = cells[1]?.trim() || ''
+        action = cells[3]?.replace(/^Action:\s*/i, '').trim() || ''
+        const btpM = cells[5]?.match(/^(\d+)/)
+        btpRef = btpM ? btpM[1] : ''
+      } else {
+        // cells[1] contains action inline with its label
+        action = cells[1].replace(/^Action:\s*/i, '').trim()
+        const btpM = cells[3]?.match(/^(\d+)/)
+        btpRef = btpM ? btpM[1] : ''
+      }
       continue
     }
 
