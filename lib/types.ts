@@ -288,7 +288,6 @@ export const DEFAULT_ROSTER: RosterData = {
     { role: 'IC2',  name: '', start: '18:00', end: '06:00' },
     { role: 'TRC',  name: '', start: '18:00', end: '06:00' },
     { role: 'WH TRC', name: '', start: '18:00', end: '06:00' },
-    { role: 'ISC',  name: '', start: '18:00', end: '06:00' },
     { role: 'TSE',  name: '', start: '18:00', end: '06:00' },
   ],
 }
