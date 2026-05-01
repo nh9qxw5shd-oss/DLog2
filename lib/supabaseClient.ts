@@ -285,7 +285,9 @@ export async function fetchHistoricalData(
   const sb = getClient()
   if (!sb) return null
 
-  const cutoff = new Date()
+  const today = new Date()
+  const todayDate = today.toISOString().slice(0, 10)
+  const cutoff = new Date(today)
   cutoff.setDate(cutoff.getDate() - windowDays + 1)
   const cutoffDate = cutoff.toISOString().slice(0, 10)
 
@@ -307,6 +309,7 @@ export async function fetchHistoricalData(
       .from('incidents')
       .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
       .gte('report_date', cutoffDate)
+      .lte('report_date', todayDate)
       .order('report_date', { ascending: true })
       .range(offset, offset + PAGE - 1)
     if (error) throw new Error(`Historical fetch failed: ${error.message}`)
