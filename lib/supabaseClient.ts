@@ -289,17 +289,32 @@ export async function fetchHistoricalData(
   cutoff.setDate(cutoff.getDate() - windowDays + 1)
   const cutoffDate = cutoff.toISOString().slice(0, 10)
 
-  // Rolling window query: only incidents within the analytics window.
-  // Explicit limit overrides PostgREST's default 1000-row cap — without it,
-  // large windows silently return only the oldest 1000 rows, dropping recent data.
-  const { data: rows, error } = await sb
-    .from('incidents')
-    .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
-    .gte('report_date', cutoffDate)
-    .order('report_date', { ascending: true })
-    .limit(100_000)
-
-  if (error) throw new Error(`Historical fetch failed: ${error.message}`)
+  // Paginate to collect all incidents in the window.
+  // PostgREST's server-side max-rows cap (typically 1 000) silently truncates
+  // any single request — .limit(N) cannot exceed it. Fetching in 1 000-row
+  // pages via .range() stays within the cap per request while gathering
+  // everything, so recent dates are never dropped from the chart.
+  type IncidentRow = {
+    report_date: string; category: string; minutes_delay: number
+    delay_delta: number | null; is_continuation: boolean
+    location: string | null; incident_start: string | null
+  }
+  const rows: IncidentRow[] = []
+  const PAGE = 1_000
+  let offset = 0
+  while (true) {
+    const { data: page, error } = await sb
+      .from('incidents')
+      .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
+      .gte('report_date', cutoffDate)
+      .order('report_date', { ascending: true })
+      .range(offset, offset + PAGE - 1)
+    if (error) throw new Error(`Historical fetch failed: ${error.message}`)
+    if (!page || page.length === 0) break
+    rows.push(...(page as IncidentRow[]))
+    if (page.length < PAGE) break
+    offset += PAGE
+  }
 
   // ── Delay trend: aggregate by report_date ───────────────────────────────
   // Use delay_delta for continuations so multi-day incidents don't double-count.
