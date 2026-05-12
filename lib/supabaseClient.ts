@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { LogState, Incident, CATEGORY_CONFIG, IncidentCategory } from './types'
+import { LogState, Incident, RosterData, CATEGORY_CONFIG, IncidentCategory } from './types'
 import { backfillAreasByLocation, reapplyHighlights } from './ccilParser'
 
 // ─── Client singleton ─────────────────────────────────────────────────────────
@@ -133,6 +133,44 @@ export async function annotateWithContinuations(log: LogState): Promise<LogState
   incidents = reapplyHighlights(incidents)
 
   return { ...log, incidents }
+}
+
+// ─── Team-at-time helper ──────────────────────────────────────────────────────
+// Returns every filled roster slot whose shift window covers the given HH:MM.
+// Night shifts that cross midnight (e.g. 18:00–06:00) are handled correctly.
+
+function toMins(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number)
+  return h * 60 + m
+}
+
+interface TeamMemberAtTime {
+  name:  string
+  role:  string
+  shift: 'day' | 'night'
+}
+
+function getTeamAtTime(roster: RosterData, incidentTime: string): TeamMemberAtTime[] {
+  if (!incidentTime || !/^\d{2}:\d{2}$/.test(incidentTime)) return []
+  const incMins = toMins(incidentTime)
+
+  const result: TeamMemberAtTime[] = []
+
+  const check = (slots: typeof roster.dayShift, shift: 'day' | 'night') => {
+    for (const slot of slots) {
+      if (!slot.name.trim()) continue
+      const s = toMins(slot.start)
+      const e = toMins(slot.end)
+      const onDuty = s <= e
+        ? incMins >= s && incMins < e
+        : incMins >= s || incMins < e   // midnight-crossing
+      if (onDuty) result.push({ name: slot.name.trim(), role: slot.role, shift })
+    }
+  }
+
+  check(roster.dayShift,   'day')
+  check(roster.nightShift, 'night')
+  return result
 }
 
 // ─── Upsert ───────────────────────────────────────────────────────────────────
@@ -273,8 +311,31 @@ export async function upsertReportData(log: LogState): Promise<void> {
       .is('ccil', null)
     if (delUncciledErr) throw new Error(`Incident null-clear failed: ${delUncciledErr.message}`)
   }
-  const { error: insErr } = await sb.from('incidents').insert(rows)
+  const { data: insertedIncidents, error: insErr } = await sb
+    .from('incidents')
+    .insert(rows)
+    .select('id, incident_start')
   if (insErr) throw new Error(`Incident insert failed: ${insErr.message}`)
+
+  // Save one row per team member per incident based on who was on duty at the
+  // time of each incident's start. ON DELETE CASCADE on incident_id means
+  // these are automatically cleaned up whenever incidents are re-inserted.
+  if (insertedIncidents && insertedIncidents.length > 0 && annotatedLog.roster) {
+    const teamRows = insertedIncidents.flatMap(row => {
+      if (!row.incident_start) return []
+      return getTeamAtTime(annotatedLog.roster, row.incident_start).map(member => ({
+        incident_id: row.id,
+        report_date: log.date,
+        name:        member.name,
+        role:        member.role,
+        shift:       member.shift,
+      }))
+    })
+    if (teamRows.length > 0) {
+      const { error: teamErr } = await sb.from('incident_team_members').insert(teamRows)
+      if (teamErr) throw new Error(`Team member insert failed: ${teamErr.message}`)
+    }
+  }
 }
 
 // ─── Fetch historical data for chart rendering ────────────────────────────────
