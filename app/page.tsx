@@ -776,7 +776,10 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
       const parts: string[] = []
       parts.push(`Loaded ${result.roster.dayShift.length} day + ${result.roster.nightShift.length} night for ${human}`)
       if (result.sourceLinks.length > 0) parts.push(`from ${result.sourceLinks.join('+')}`)
-      if (result.skippedRows > 0) parts.push(`· ${result.skippedRows} cells skipped (leave / no time)`)
+      const notes: string[] = []
+      if (result.leaveSkipped > 0) notes.push(`${result.leaveSkipped} on leave`)
+      if (result.skippedRows > 0)  notes.push(`${result.skippedRows} non-time cells`)
+      if (notes.length > 0) parts.push(`· skipped: ${notes.join(', ')}`)
       setImportMsg(parts.join(' '))
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))

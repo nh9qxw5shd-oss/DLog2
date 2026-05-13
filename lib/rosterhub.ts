@@ -149,6 +149,26 @@ function mapRole(sectionTitle: string, link: string): string {
 interface RosterhubRow {
   staff_name?: string
   shifts?: Record<string, string>
+  // Per-day tag list. Tags like AL/CL/SICK indicate the person is OFF even
+  // though their normal shift time is still recorded in `shifts`.
+  tags?: Record<string, string[]>
+}
+
+// Tags on a given day that mean the person is off / not actually working.
+// `RDW` (Rest Day Worked) is intentionally NOT here — RDW means they ARE on
+// duty. `HGD` (Higher Grade Duty) likewise means they're working, just in a
+// different capacity.
+const LEAVE_TAGS = new Set([
+  'AL', 'CL', 'SICK', 'LROP', 'HROP', 'NA', 'BO',
+])
+
+function isOnLeave(row: RosterhubRow, dayKey: DayKey): boolean {
+  const tags = row.tags?.[dayKey]
+  if (!tags || !Array.isArray(tags)) return false
+  for (const t of tags) {
+    if (LEAVE_TAGS.has(String(t).toUpperCase())) return true
+  }
+  return false
 }
 interface RosterhubSection {
   title?: string
@@ -170,7 +190,8 @@ export interface RosterhubImportResult {
   date: string              // ISO log date used (the period start derived from CCIL)
   dayKey: DayKey            // sun..sat — which column in rosterhub.shifts we read
   weekEnding: string        // Saturday week_ending for that log date
-  skippedRows: number       // staff rows that had no parseable time for this day
+  skippedRows: number       // staff rows whose cell had no parseable time
+  leaveSkipped: number      // staff rows skipped because of a leave/absence tag
 }
 
 export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImportResult> {
@@ -208,6 +229,7 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
   const names = new Set<string>()
   const sourceLinks: string[] = []
   let skipped = 0
+  let leaveSkipped = 0
 
   for (const week of data as RosterhubWeekRow[]) {
     if (!week.data?.sections) continue
@@ -218,6 +240,11 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
         const name = (row.staff_name || '').trim()
         if (!name) continue
         names.add(name)
+
+        // rosterhub keeps the normal shift time in the cell even when the
+        // person is off, marking the absence via a per-day tag (AL, CL, etc).
+        // Treat the row as not-working when any LEAVE_TAGS tag is set.
+        if (isOnLeave(row, dayKey)) { leaveSkipped++; continue }
 
         const cell = row.shifts?.[dayKey]
         if (!cell) continue
@@ -233,6 +260,15 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
     }
   }
 
+  // Weekday ISC day shift must show even when uncovered — the EMCC report
+  // should make the gap visible rather than silently omit the role.
+  const isWeekday = dayKey === 'mon' || dayKey === 'tue' || dayKey === 'wed'
+                 || dayKey === 'thu' || dayKey === 'fri'
+  const hasIscDay = dayShift.some(s => s.role === 'ISC')
+  if (isWeekday && !hasIscDay) {
+    dayShift.push({ role: 'ISC', name: 'Uncovered', start: '07:00', end: '19:00' })
+  }
+
   return {
     roster: { dayShift, nightShift },
     knownNames: Array.from(names).sort(),
@@ -241,6 +277,7 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
     dayKey,
     weekEnding,
     skippedRows: skipped,
+    leaveSkipped,
   }
 }
 
