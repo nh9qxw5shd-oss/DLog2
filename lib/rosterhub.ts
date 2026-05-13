@@ -129,6 +129,23 @@ function parseShiftCell(raw: string): { start: string; end: string } | null {
   return { start: first.time, end }
 }
 
+// Map rosterhub section titles to DLog2's standard role abbreviations.
+// Unrecognised titles are used as-is — users can still edit after import.
+const SECTION_TITLE_TO_ROLE: Record<string, string> = {
+  'SNDM':                       'SNDM',
+  'Route Control Manager':       'RCM',
+  'Incident Controller 1':       'IC',
+  'Incident Controller 2':       'IC2',
+  'Train Running Controller':    'TRC',
+  'WH TRC':                      'WH TRC',
+  'Incident Support Controller': 'ISC',
+  'Train Safety Engineer':       'TSE',
+}
+
+function mapRole(sectionTitle: string, link: string): string {
+  return SECTION_TITLE_TO_ROLE[sectionTitle] ?? sectionTitle ?? link ?? 'Staff'
+}
+
 interface RosterhubRow {
   staff_name?: string
   shifts?: Record<string, string>
@@ -195,7 +212,7 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
     if (!week.data?.sections) continue
     sourceLinks.push(week.link)
     for (const section of week.data.sections) {
-      const role = (section.title || week.link || 'Staff').toString().trim()
+      const role = mapRole((section.title || '').toString().trim(), week.link)
       for (const row of section.rows ?? []) {
         const name = (row.staff_name || '').trim()
         if (!name) continue
