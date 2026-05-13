@@ -167,8 +167,9 @@ export interface RosterhubImportResult {
   roster: RosterData
   knownNames: string[]
   sourceLinks: string[]
-  date: string
-  weekEnding: string
+  date: string              // ISO log date used (the period start derived from CCIL)
+  dayKey: DayKey            // sun..sat — which column in rosterhub.shifts we read
+  weekEnding: string        // Saturday week_ending for that log date
   skippedRows: number       // staff rows that had no parseable time for this day
 }
 
@@ -237,6 +238,7 @@ export async function fetchRosterFromHub(isoDate: string): Promise<RosterhubImpo
     knownNames: Array.from(names).sort(),
     sourceLinks,
     date: isoDate,
+    dayKey,
     weekEnding,
     skippedRows: skipped,
   }

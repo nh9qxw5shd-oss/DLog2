@@ -769,11 +769,14 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
       const result = await fetchRosterFromHub(log.date)
       onChange({ roster: result.roster })
       onLearnNames(result.knownNames)
+      const [y, m, d] = result.date.split('-').map(Number)
+      const human = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', {
+        weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+      })
       const parts: string[] = []
-      parts.push(`Loaded ${result.roster.dayShift.length} day + ${result.roster.nightShift.length} night`)
+      parts.push(`Loaded ${result.roster.dayShift.length} day + ${result.roster.nightShift.length} night for ${human}`)
       if (result.sourceLinks.length > 0) parts.push(`from ${result.sourceLinks.join('+')}`)
-      parts.push(`(week ending ${result.weekEnding})`)
-      if (result.skippedRows > 0) parts.push(`· ${result.skippedRows} cells skipped (no time / leave)`)
+      if (result.skippedRows > 0) parts.push(`· ${result.skippedRows} cells skipped (leave / no time)`)
       setImportMsg(parts.join(' '))
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))
