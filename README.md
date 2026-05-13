@@ -97,6 +97,26 @@ No `.env` file needed.
 
 Edit `lib/types.ts` → `DEFAULT_ROSTER`.
 
+### Auto-import roster from rosterhub (optional)
+
+If you run the sibling rosterhub project, DLog2 can fetch the published roster
+for the Log Date and pre-fill day / night shifts. The Roster Entry step grows
+an "Import roster" button when these env vars are set on the Vercel project:
+
+```
+NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL   = https://<rosterhub-project>.supabase.co
+NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY = <rosterhub anon key>
+NEXT_PUBLIC_ROSTERHUB_LINKS          = CTRL,SNDM   # optional, default CTRL,SNDM
+```
+
+rosterhub's `roster_weeks` and `staff_directory` tables must allow anonymous
+SELECT (a public RLS policy) for the import + name typeahead to work.
+
+Shift cells that contain times (`07:00-19:00`, `0700-1900`, etc.) are mapped
+into DLog2 slots; cells like `AL`, `OFF`, `SPARE` are skipped. A shift whose
+start hour is between 06:00 and 17:59 lands on the day shift, otherwise the
+night shift. Manual entry remains available — the import only pre-fills.
+
 ## Modifying the PDF
 
 Edit `lib/pdfGenerator.ts` — sections are clearly commented.
