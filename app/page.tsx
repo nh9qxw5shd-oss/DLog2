@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
-  Loader2, AlertCircle, Activity, Flame, Shield, Pencil
+  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
@@ -18,6 +18,7 @@ import {
 import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
 import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations } from '@/lib/supabaseClient'
+import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 
@@ -45,6 +46,13 @@ function LiveClock() {
 
 function cn(...cls: (string | false | undefined | null)[]) {
   return cls.filter(Boolean).join(' ')
+}
+
+function mergeNames(a: string[], b: string[]): string[] {
+  const set = new Set<string>()
+  for (const n of a) { const t = n.trim(); if (t) set.add(t) }
+  for (const n of b) { const t = n.trim(); if (t) set.add(t) }
+  return Array.from(set).sort((x, y) => x.localeCompare(y))
 }
 
 function sevBadge(sev: string) {
@@ -725,12 +733,18 @@ function FiveDaySection({ log, onChange }: {
 
 // ─── Step 2: Roster ───────────────────────────────────────────────────────────
 
-function RosterStep({ log, onChange, onNext, onBack }: {
-  log:      LogState
-  onChange: (updates: Partial<LogState>) => void
-  onNext:   () => void
-  onBack:   () => void
+function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }: {
+  log:          LogState
+  onChange:     (updates: Partial<LogState>) => void
+  onNext:       () => void
+  onBack:       () => void
+  knownNames:   string[]
+  onLearnNames: (names: string[]) => void
 }) {
+  const [importing, setImporting]       = useState(false)
+  const [importMsg, setImportMsg]       = useState<string>('')
+  const [importError, setImportError]   = useState<string>('')
+
   const updateSlot = (shift: 'dayShift' | 'nightShift', idx: number, field: keyof ShiftSlot, value: string) => {
     const r = { ...log.roster }
     r[shift] = r[shift].map((s, i) => i === idx ? { ...s, [field]: value } : s)
@@ -745,6 +759,33 @@ function RosterStep({ log, onChange, onNext, onBack }: {
     const r = { ...log.roster }
     r[shift] = r[shift].filter((_, i) => i !== idx)
     onChange({ roster: r })
+  }
+
+  const importFromRosterhub = async () => {
+    setImporting(true)
+    setImportMsg('')
+    setImportError('')
+    try {
+      const result = await fetchRosterFromHub(log.date)
+      onChange({ roster: result.roster })
+      onLearnNames(result.knownNames)
+      const [y, m, d] = result.date.split('-').map(Number)
+      const human = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', {
+        weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+      })
+      const parts: string[] = []
+      parts.push(`Loaded ${result.roster.dayShift.length} day + ${result.roster.nightShift.length} night for ${human}`)
+      if (result.sourceLinks.length > 0) parts.push(`from ${result.sourceLinks.join('+')}`)
+      const notes: string[] = []
+      if (result.leaveSkipped > 0) notes.push(`${result.leaveSkipped} on leave`)
+      if (result.skippedRows > 0)  notes.push(`${result.skippedRows} non-time cells`)
+      if (notes.length > 0) parts.push(`· skipped: ${notes.join(', ')}`)
+      setImportMsg(parts.join(' '))
+    } catch (e: unknown) {
+      setImportError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setImporting(false)
+    }
   }
 
   const renderShiftTable = (shift: 'dayShift' | 'nightShift', label: string) => (
@@ -774,6 +815,8 @@ function RosterStep({ log, onChange, onNext, onBack }: {
                 </td>
                 <td className="px-2 py-1.5">
                   <input value={slot.name} onChange={e => updateSlot(shift, i, 'name', e.target.value)}
+                    list="rosterhub-staff-names"
+                    autoComplete="off"
                     className="w-full bg-transparent text-white text-xs font-medium outline-none border-b border-transparent focus:border-[#E05206]"
                     placeholder="Name…" />
                 </td>
@@ -822,6 +865,47 @@ function RosterStep({ log, onChange, onNext, onBack }: {
       </div>
 
       <FiveDaySection log={log} onChange={onChange} />
+
+      {isRosterhubConfigured() && (
+        <div className="card p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Import from rosterhub</h3>
+              <p className="text-xs text-[#7A8BA8] mt-0.5">
+                Auto-fills day / night shifts for the Log Date above using the published roster.
+                You can still edit names and times after import.
+              </p>
+            </div>
+            <button
+              onClick={importFromRosterhub}
+              disabled={importing || !log.date}
+              className="flex items-center gap-2 px-4 py-2 bg-[#4A6FA5] text-white text-xs font-semibold rounded hover:bg-[#5A7FB5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {importing
+                ? <><Loader2 size={14} className="animate-spin" /> Importing…</>
+                : <><CloudDownload size={14} /> Import roster</>}
+            </button>
+          </div>
+          {importMsg && (
+            <div className="mt-3 text-xs text-[#27AE60] font-mono flex items-start gap-2">
+              <Check size={12} className="mt-0.5 flex-shrink-0" />
+              <span>{importMsg}</span>
+            </div>
+          )}
+          {importError && (
+            <div className="mt-3 text-xs text-red-400 flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>{importError}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {knownNames.length > 0 && (
+        <datalist id="rosterhub-staff-names">
+          {knownNames.map(n => <option key={n} value={n} />)}
+        </datalist>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {renderShiftTable('dayShift',   '◑  Day Shift')}
@@ -1326,6 +1410,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
 export default function Home() {
   const [step, setStep] = useState(1)
   const [log,  setLog]  = useState<LogState>(BLANK_LOG)
+  const [knownNames, setKnownNames] = useState<string[]>([])
 
   // Set today's date safely after mount — avoids SSR/client hydration mismatch
   useEffect(() => {
@@ -1333,6 +1418,20 @@ export default function Home() {
     const pad = (n: number) => n.toString().padStart(2, '0')
     const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
     setLog(prev => prev.date ? prev : { ...prev, date: today })
+  }, [])
+
+  // Preload the rosterhub staff directory so manual entry has typeahead even
+  // before the user clicks Import. Silent failure: if rosterhub isn't
+  // configured or the table isn't publicly readable, autocomplete is just off.
+  useEffect(() => {
+    if (!isRosterhubConfigured()) return
+    fetchKnownStaffNames().then(names => {
+      if (names.length > 0) setKnownNames(prev => mergeNames(prev, names))
+    })
+  }, [])
+
+  const learnNames = useCallback((names: string[]) => {
+    setKnownNames(prev => mergeNames(prev, names))
   }, [])
 
   const update = (patch: Partial<LogState>) => setLog(prev => ({ ...prev, ...patch }))
@@ -1383,7 +1482,8 @@ export default function Home() {
         {step === 1 && <UploadStep onComplete={onUploadComplete} />}
         {step === 2 && (
           <RosterStep log={log} onChange={update}
-            onNext={() => setStep(3)} onBack={() => setStep(1)} />
+            onNext={() => setStep(3)} onBack={() => setStep(1)}
+            knownNames={knownNames} onLearnNames={learnNames} />
         )}
         {step === 3 && (
           <ReviewStep log={log}
