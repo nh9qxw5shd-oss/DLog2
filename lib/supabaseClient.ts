@@ -284,6 +284,7 @@ export async function upsertReportData(log: LogState): Promise<void> {
       trmc_code:           inc.trmcCode          ?? null,
       fts_div_count:       inc.ftsDivCount       ?? null,
       event_count:         inc.eventCount        ?? null,
+      events:              inc.events            ?? null,
       has_files:           inc.hasFiles          ?? false,
       hour_of_day:         hourOfDay,
       day_of_week:         dayOfWeek,
