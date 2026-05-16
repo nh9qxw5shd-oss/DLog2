@@ -283,6 +283,56 @@ function cellValues(line: string): string[] {
     .map(c => stripMd(c.trim()))
 }
 
+// ─── Event-row detection ──────────────────────────────────────────────────────
+// An EVENTS-block entry renders as a markdown table row whose first cell is a
+// date. Detect entries by this shape rather than by a preceding "**EVENTS**"
+// marker: CCIL/Mammoth output is inconsistent (bold vs plain, merged header
+// cells, varying date formats), so matching the marker text has historically
+// been too brittle and silently produced empty event arrays.
+
+const EVENT_DATE_RE = /^(\d{1,2})[/.-](\d{1,2})(?:[/.-]\d{2,4})?$/
+const EVENT_TIME_RE = /^(?:[01]?\d|2[0-3])[:.h]?[0-5]\d$/
+
+function normEventDate(raw: string): string {
+  const m = raw.match(EVENT_DATE_RE)
+  if (!m) return raw
+  return `${m[1].padStart(2, '0')}/${m[2].padStart(2, '0')}`
+}
+
+/**
+ * Try to read a single EVENTS-block entry from a table row's cells.
+ * Expected column order is [Date, Time, Company, Description], but the time
+ * and company columns are treated as optional so partial rows still survive.
+ */
+function parseEventRow(cells: string[]): IncidentEvent | null {
+  if (cells.length < 3) return null
+  const dateCell = (cells[0] || '').trim()
+  if (!EVENT_DATE_RE.test(dateCell)) return null
+
+  let idx = 1
+  let time = ''
+  if (EVENT_TIME_RE.test((cells[idx] || '').trim())) {
+    time = (cells[idx] || '').trim()
+    idx++
+  }
+
+  const rest = cells.slice(idx).map(c => (c || '').trim())
+  let company = ''
+  let description = ''
+  if (rest.length <= 1) {
+    description = rest[0] || ''
+  } else {
+    company = rest[0]
+    description = rest.slice(1).filter(Boolean).join(' ').trim()
+  }
+  if (!description) {            // no company recorded — value sat in that column
+    description = company
+    company = ''
+  }
+  if (!description) return null
+  return { date: normEventDate(dateCell), time, company, description }
+}
+
 
 // ─── CCIL numeric type-code → category ────────────────────────────────────────
 // Row 3 of each incident block contains a type like "18 Fires" or "07b Level Crossing..."
@@ -404,8 +454,6 @@ function parseIncidentBlock(
   let minutesDelay = 0
   let trustRef = ''
   const events: IncidentEvent[] = []
-  let inEvents = false
-  let eventHeaderSeen = false
 
   // ── Extended capture fields ────────────────────────────────────────────────
   let equipment      = ''   // equipment / asset identifier for infrastructure incidents
@@ -436,6 +484,15 @@ function parseIncidentBlock(
     if (line === '| --- | --- | --- | --- |') continue
 
     const cells = line.startsWith('|') ? cellValues(line) : []
+
+    // EVENTS-block entry — captured by row shape (date in the first cell) so it
+    // works regardless of how the "**EVENTS**" heading is rendered. Handled
+    // first so an event row is never mistaken for a location/type/train row.
+    const eventRow = parseEventRow(cells)
+    if (eventRow) {
+      events.push(eventRow)
+      continue
+    }
 
     // Location row (usually near top): prefer non-label cell with meaningful text.
     if (!location && cells.length > 0) {
@@ -543,19 +600,17 @@ function parseIncidentBlock(
       continue
     }
 
-    // Events section — strip pipes so "| **EVENTS** |" (table-cell form) also matches
-    const coreLine = line.replace(/\|/g, '').trim()
-    if (coreLine === '**EVENTS**') {
-      inEvents = true
+    // Section markers — strip pipes and markdown so both bare and table-cell
+    // forms ("**EVENTS**", "| EVENTS |", "| **EVENTS** |") are recognised.
+    const coreLine = line.replace(/\|/g, '').replace(/\*/g, '').trim()
+    if (/^events?\s*:?$/i.test(coreLine)) {
       inTrainBlock = false
-      eventHeaderSeen = false
       continue
     }
 
     // Train section
-    if (coreLine === '**TRAIN**') {
+    if (/^train\s*:?$/i.test(coreLine)) {
       inTrainBlock = true
-      inEvents = false
       trainHeaderSeen = false
       continue
     }
@@ -586,26 +641,6 @@ function parseIncidentBlock(
       }
     }
 
-    if (inEvents) {
-      if (line.includes('**Date**') && line.includes('**Description**')) {
-        eventHeaderSeen = true
-        continue
-      }
-      if (!eventHeaderSeen) continue
-
-      if (line.startsWith('|')) {
-        const cells = cellValues(line)
-        // | DD/MM[/YYYY] | HH:MM | CO | Description text |
-        if (cells.length >= 4 && /^\d{2}\/\d{2}(\/\d{4})?$/.test(cells[0]) && cells[3]) {
-          events.push({
-            date: cells[0].slice(0, 5),   // normalise DD/MM/YYYY → DD/MM
-            time: cells[1],
-            company: cells[2],
-            description: cells[3],
-          })
-        }
-      }
-    }
   }
 
   // ── Classification ─────────────────────────────────────────────────────────
