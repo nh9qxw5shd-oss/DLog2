@@ -543,8 +543,9 @@ function parseIncidentBlock(
       continue
     }
 
-    // Events section
-    if (line === '**EVENTS**') {
+    // Events section — strip pipes so "| **EVENTS** |" (table-cell form) also matches
+    const coreLine = line.replace(/\|/g, '').trim()
+    if (coreLine === '**EVENTS**') {
       inEvents = true
       inTrainBlock = false
       eventHeaderSeen = false
@@ -552,7 +553,7 @@ function parseIncidentBlock(
     }
 
     // Train section
-    if (line === '**TRAIN**') {
+    if (coreLine === '**TRAIN**') {
       inTrainBlock = true
       inEvents = false
       trainHeaderSeen = false
@@ -594,10 +595,10 @@ function parseIncidentBlock(
 
       if (line.startsWith('|')) {
         const cells = cellValues(line)
-        // | DD/MM | HH:MM | CO | Description text |
-        if (cells.length >= 4 && /^\d{2}\/\d{2}$/.test(cells[0]) && cells[3]) {
+        // | DD/MM[/YYYY] | HH:MM | CO | Description text |
+        if (cells.length >= 4 && /^\d{2}\/\d{2}(\/\d{4})?$/.test(cells[0]) && cells[3]) {
           events.push({
-            date: cells[0],
+            date: cells[0].slice(0, 5),   // normalise DD/MM/YYYY → DD/MM
             time: cells[1],
             company: cells[2],
             description: cells[3],
