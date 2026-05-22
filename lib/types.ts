@@ -164,6 +164,7 @@ export interface Incident {
   btpRef?: string
   actionCode?: string
   isHighlight: boolean
+  isOffRoute?: boolean      // true when incident is outside the EM managed route
   rawText?: string
   isContinuation?: boolean  // true when this CCIL appeared in a prior report
   delayDelta?: number       // additional delay since previous occurrence (continuations only)

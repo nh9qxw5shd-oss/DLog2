@@ -431,14 +431,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
   // ── Disruption summary bar ────────────────────────────────────────────────
 
   const drawDisruptionSummary = (incidents: Incident[]) => {
-    const totalMins = incidents.reduce((s, i) =>
+    const routeInc  = incidents.filter(i => !i.isOffRoute)
+    const totalMins = routeInc.reduce((s, i) =>
       s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0)
-    const totalCan  = incidents.reduce((s, i) => s + (i.cancelled    || 0), 0)
-    const totalPCan = incidents.reduce((s, i) => s + (i.partCancelled|| 0), 0)
-    const topInc    = [...incidents].sort((a,b) => (b.minutesDelay||0) - (a.minutesDelay||0))[0]
+    const totalCan  = routeInc.reduce((s, i) => s + (i.cancelled    || 0), 0)
+    const totalPCan = routeInc.reduce((s, i) => s + (i.partCancelled|| 0), 0)
+    const topInc    = [...routeInc].sort((a,b) => (b.minutesDelay||0) - (a.minutesDelay||0))[0]
+    const offRouteCount = incidents.filter(i => i.isOffRoute).length
 
     const boxes = [
-      { label: 'Total Delay',      value: `${totalMins.toLocaleString()} min`, color: C.amber  },
+      { label: 'Route Delay',      value: `${totalMins.toLocaleString()} min`, color: C.amber  },
       { label: 'Cancellations',    value: String(totalCan),                    color: C.red    },
       { label: 'Part Cancelled',   value: String(totalPCan),                   color: C.orange },
       { label: 'Worst Incident',   value: topInc ? `${topInc.minutesDelay?.toLocaleString()} min` : '—', color: C.steel },
@@ -454,6 +456,14 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
       tx(b.label.toUpperCase(), bx + (bw-2)/2, y + 17, { align: 'center' })
     })
     y += 22
+    if (offRouteCount > 0) {
+      sf('normal', 6.5); stc(C.midGray)
+      tx(
+        `* ${offRouteCount} off-route incident${offRouteCount !== 1 ? 's' : ''} included in log for visibility — excluded from route totals above.`,
+        M, y
+      )
+      y += 5
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -584,7 +594,9 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
 
     const tableBody = items.map(i => {
       let delayCell = '—'
-      if (i.isContinuation) {
+      if (i.isOffRoute) {
+        delayCell = (i.minutesDelay || 0) > 0 ? `${i.minutesDelay!.toLocaleString()} *` : '—'
+      } else if (i.isContinuation) {
         const delta = i.delayDelta ?? 0
         delayCell = delta > 0
           ? `+${delta.toLocaleString()} (c/o)`
@@ -592,13 +604,20 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
       } else if ((i.minutesDelay || 0) > 0) {
         delayCell = i.minutesDelay!.toLocaleString()
       }
+      let titleCell: string
+      if (i.isOffRoute) {
+        const base = i.title.length > 50 ? i.title.slice(0, 50) + '…' : i.title
+        titleCell = `${base} [Off Route]`
+      } else if (i.isContinuation) {
+        titleCell = i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`
+      } else {
+        titleCell = i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title
+      }
       return [
         i.ccil || '—',
         i.location || '—',
         i.incidentStart || '—',
-        i.isContinuation
-          ? (i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`)
-          : (i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title),
+        titleCell,
         delayCell,
         (i.cancelled || 0) > 0 ? String(i.cancelled) : '—',
         i.severity,
@@ -624,9 +643,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
         6: { cellWidth: 13 },
       },
       didParseCell: (data: any) => {
-        if (data.section === 'body' && data.column.index === 6) {
-          data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.midGray
-          data.cell.styles.fontStyle = 'bold'
+        if (data.section === 'body') {
+          const inc = items[data.row.index]
+          if (inc?.isOffRoute) {
+            data.cell.styles.textColor = C.midGray
+            data.cell.styles.fontStyle = 'italic'
+          }
+          if (data.column.index === 6) {
+            data.cell.styles.textColor = inc?.isOffRoute ? C.midGray : (SEV_COLOR[data.cell.raw as string] || C.midGray)
+            data.cell.styles.fontStyle = 'bold'
+          }
         }
       },
     })
@@ -648,7 +674,9 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
       sectionHead(label, `${items.length} incident${items.length !== 1 ? 's' : ''}`)
       const tableBody = items.map(i => {
         let delayCell = '—'
-        if (i.isContinuation) {
+        if (i.isOffRoute) {
+          delayCell = (i.minutesDelay || 0) > 0 ? `${i.minutesDelay!.toLocaleString()} *` : '—'
+        } else if (i.isContinuation) {
           const delta = i.delayDelta ?? 0
           delayCell = delta > 0
             ? `+${delta.toLocaleString()} (c/o)`
@@ -656,13 +684,20 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
         } else if ((i.minutesDelay || 0) > 0) {
           delayCell = i.minutesDelay!.toLocaleString()
         }
+        let titleCell: string
+        if (i.isOffRoute) {
+          const base = i.title.length > 50 ? i.title.slice(0, 50) + '…' : i.title
+          titleCell = `${base} [Off Route]`
+        } else if (i.isContinuation) {
+          titleCell = i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`
+        } else {
+          titleCell = i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title
+        }
         return [
           i.ccil || '—',
           i.location || '—',
           i.incidentStart || '—',
-          i.isContinuation
-            ? (i.title.length > 56 ? i.title.slice(0, 56) + '… [c/o]' : `${i.title} [c/o]`)
-            : (i.title.length > 65 ? i.title.slice(0, 65) + '…' : i.title),
+          titleCell,
           delayCell,
           (i.cancelled || 0) > 0 ? String(i.cancelled) : '—',
           i.severity,
@@ -687,9 +722,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
           6: { cellWidth: 13 },
         },
         didParseCell: (data: any) => {
-          if (data.section === 'body' && data.column.index === 6) {
-            data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.midGray
-            data.cell.styles.fontStyle = 'bold'
+          if (data.section === 'body') {
+            const inc = items[data.row.index]
+            if (inc?.isOffRoute) {
+              data.cell.styles.textColor = C.midGray
+              data.cell.styles.fontStyle = 'italic'
+            }
+            if (data.column.index === 6) {
+              data.cell.styles.textColor = inc?.isOffRoute ? C.midGray : (SEV_COLOR[data.cell.raw as string] || C.midGray)
+              data.cell.styles.fontStyle = 'bold'
+            }
           }
         },
       })
@@ -708,8 +750,9 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
     checkPage(22)
     sectionHead('DISRUPTION IMPACT — TOP INCIDENTS BY DELAY')
 
-    const totalMins = byDelay.reduce((s, i) => s + (i.minutesDelay || 0), 0)
-    const totalCan  = byDelay.reduce((s, i) => s + (i.cancelled    || 0), 0)
+    const routeByDelay = byDelay.filter(i => !i.isOffRoute)
+    const totalMins = routeByDelay.reduce((s, i) => s + (i.minutesDelay || 0), 0)
+    const totalCan  = routeByDelay.reduce((s, i) => s + (i.cancelled    || 0), 0)
 
     autoTable(doc, {
       startY: y,
@@ -718,12 +761,16 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
         `#${idx + 1}`,
         i.ccil || '—',
         CATEGORY_CONFIG[i.category].shortLabel,
-        `${i.location}  —  ${i.title.slice(0, 48)}`,
-        i.minutesDelay?.toLocaleString() || '—',
+        i.isOffRoute
+          ? `${i.location}  —  ${i.title.slice(0, 40)} [Off Route]`
+          : `${i.location}  —  ${i.title.slice(0, 48)}`,
+        i.isOffRoute
+          ? `${i.minutesDelay?.toLocaleString() || '—'} *`
+          : (i.minutesDelay?.toLocaleString() || '—'),
         i.cancelled    || '—',
         i.partCancelled|| '—',
       ]),
-      foot: [['', '', '', 'TOTAL', totalMins.toLocaleString(), totalCan, '']],
+      foot: [['', '', '', 'ROUTE TOTAL', totalMins.toLocaleString(), totalCan, '']],
       margin: { left: M, right: M },
       theme:  'grid',
       headStyles: { fillColor: C.blue,  textColor: C.white,  fontSize: 7,   fontStyle: 'bold' },
@@ -738,6 +785,15 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
         4: { cellWidth: 18, halign: 'right' as const },
         5: { cellWidth: 18, halign: 'right' as const },
         6: { cellWidth: 15, halign: 'right' as const },
+      },
+      didParseCell: (data: any) => {
+        if (data.section === 'body') {
+          const inc = byDelay[data.row.index]
+          if (inc?.isOffRoute) {
+            data.cell.styles.textColor = C.midGray
+            data.cell.styles.fontStyle = 'italic'
+          }
+        }
       },
     })
 
@@ -809,17 +865,24 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
     autoTable(doc, {
       startY: y + 3,
       head: [['CCIL', 'Start', 'Category', 'Sev', 'Location', 'Incident', 'Delay', 'Can', 'PtCan']],
-      body: appendixIncidents.map((inc) => [
-        inc.ccil || '—',
-        inc.incidentStart || '—',
-        CATEGORY_CONFIG[inc.category].shortLabel,
-        inc.severity,
-        inc.location || '—',
-        inc.title.length > 70 ? `${inc.title.slice(0, 70)}…` : inc.title,
-        (inc.minutesDelay || 0) > 0 ? String(inc.minutesDelay) : '0',
-        String(inc.cancelled || 0),
-        String(inc.partCancelled || 0),
-      ]),
+      body: appendixIncidents.map((inc) => {
+        const titleText = inc.isOffRoute
+          ? (inc.title.length > 60 ? `${inc.title.slice(0, 60)}… [OR]` : `${inc.title} [OR]`)
+          : (inc.title.length > 70 ? `${inc.title.slice(0, 70)}…` : inc.title)
+        return [
+          inc.ccil || '—',
+          inc.incidentStart || '—',
+          CATEGORY_CONFIG[inc.category].shortLabel,
+          inc.severity,
+          inc.location || '—',
+          titleText,
+          (inc.minutesDelay || 0) > 0
+            ? (inc.isOffRoute ? `${inc.minutesDelay}*` : String(inc.minutesDelay))
+            : '0',
+          String(inc.cancelled || 0),
+          String(inc.partCancelled || 0),
+        ]
+      }),
       margin: { left: M, right: M, top: 22 },
       theme: 'grid',
       headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold', cellPadding: 1.8 },
@@ -837,9 +900,15 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
         8: { cellWidth: 12, halign: 'right' as const },
       },
       didParseCell: (data: any) => {
-        if (data.section === 'body' && data.column.index === 3) {
-          data.cell.styles.fontStyle = 'bold'
-          data.cell.styles.textColor = SEV_COLOR[data.cell.raw as string] || C.black
+        if (data.section === 'body') {
+          const inc = appendixIncidents[data.row.index]
+          if (inc?.isOffRoute) data.cell.styles.textColor = C.midGray
+          if (data.column.index === 3) {
+            data.cell.styles.fontStyle = 'bold'
+            data.cell.styles.textColor = inc?.isOffRoute
+              ? C.midGray
+              : (SEV_COLOR[data.cell.raw as string] || C.black)
+          }
         }
       },
       didDrawPage: () => { drawCompactHeader() },
