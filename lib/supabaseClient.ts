@@ -190,11 +190,13 @@ export async function upsertReportData(log: LogState): Promise<void> {
   const annotatedLog = await annotateWithContinuations(log)
   const annotated = annotatedLog.incidents
 
-  // Totals use delta delay for continuations, raw delay for first-seen incidents
-  const totalDelay = annotated.reduce((s, i) =>
+  // Totals use delta delay for continuations, raw delay for first-seen incidents.
+  // Off-route incidents are excluded — they are in the log for visibility only.
+  const routeIncidents = annotated.filter(i => !i.isOffRoute)
+  const totalDelay = routeIncidents.reduce((s, i) =>
     s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay ?? 0)), 0)
-  const totalCancelled     = annotated.reduce((s, i) => s + (i.cancelled     || 0), 0)
-  const totalPartCancelled = annotated.reduce((s, i) => s + (i.partCancelled || 0), 0)
+  const totalCancelled     = routeIncidents.reduce((s, i) => s + (i.cancelled     || 0), 0)
+  const totalPartCancelled = routeIncidents.reduce((s, i) => s + (i.partCancelled || 0), 0)
 
   // Upsert report row (conflict on report_date → update in place)
   const { data: reportRow, error: reportErr } = await sb
@@ -251,6 +253,7 @@ export async function upsertReportData(log: LogState): Promise<void> {
       cancelled:       inc.cancelled     ?? 0,
       part_cancelled:  inc.partCancelled ?? 0,
       is_highlight:    inc.isHighlight,
+      is_off_route:    inc.isOffRoute    ?? false,
       is_continuation: inc.isContinuation ?? false,
       delay_delta:     inc.delayDelta    ?? null,
 
@@ -360,7 +363,7 @@ export async function fetchHistoricalData(
   // everything, so recent dates are never dropped from the chart.
   type IncidentRow = {
     report_date: string; category: string; minutes_delay: number
-    delay_delta: number | null; is_continuation: boolean
+    delay_delta: number | null; is_continuation: boolean; is_off_route: boolean
     location: string | null; incident_start: string | null
   }
   const rows: IncidentRow[] = []
@@ -369,7 +372,7 @@ export async function fetchHistoricalData(
   while (true) {
     const { data: page, error } = await sb
       .from('incidents')
-      .select('report_date, category, minutes_delay, delay_delta, is_continuation, location, incident_start')
+      .select('report_date, category, minutes_delay, delay_delta, is_continuation, is_off_route, location, incident_start')
       .gte('report_date', cutoffDate)
       .lte('report_date', todayDate)
       .order('report_date', { ascending: true })
@@ -385,12 +388,15 @@ export async function fetchHistoricalData(
   // Use delay_delta for continuations so multi-day incidents don't double-count.
   // Exclude continuations from incidentCount so the count and average-delay-per-
   // incident charts reflect new incidents only, not repeated carry-overs.
+  // Off-route incidents are excluded from delay totals (visibility only).
   const byDate = new Map<string, { totalDelay: number; incidentCount: number }>()
   for (const row of rows ?? []) {
     const agg = byDate.get(row.report_date) ?? { totalDelay: 0, incidentCount: 0 }
-    const delayContrib = row.is_continuation
-      ? (row.delay_delta ?? 0)
-      : (row.minutes_delay ?? 0)
+    const delayContrib = row.is_off_route
+      ? 0
+      : row.is_continuation
+        ? (row.delay_delta ?? 0)
+        : (row.minutes_delay ?? 0)
     byDate.set(row.report_date, {
       totalDelay:    agg.totalDelay    + delayContrib,
       incidentCount: agg.incidentCount + (row.is_continuation ? 0 : 1),

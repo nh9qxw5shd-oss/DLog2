@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
-  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload
+  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
@@ -931,10 +931,11 @@ const CAT_ICON_MAP: Partial<Record<IncidentCategory, typeof Shield>> = {
   FIRE: Flame, CRIME: AlertCircle, HABD_WILD: Activity, NEAR_MISS: AlertTriangle,
 }
 
-function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
+function IncidentCard({ incident, onRemove, onToggleHighlight, onToggleOffRoute, onEdit }: {
   incident: Incident
   onRemove: () => void
   onToggleHighlight: () => void
+  onToggleOffRoute: () => void
   onEdit: (updates: Pick<Incident, 'title' | 'severity' | 'category'>) => void
 }) {
   const [editing, setEditing] = useState(false)
@@ -1006,7 +1007,10 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
   }
 
   return (
-    <div className={cn('card p-4 space-y-2 transition-all', incident.isHighlight && 'border-l-2 border-l-[#E05206]')}>
+    <div className={cn(
+      'card p-4 space-y-2 transition-all',
+      incident.isOffRoute ? 'border-l-2 border-l-[#6B47DC] opacity-80' : incident.isHighlight ? 'border-l-2 border-l-[#E05206]' : ''
+    )}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2 min-w-0">
           <Icon size={14} className="shrink-0 mt-0.5" style={{ color: cat.color }} />
@@ -1024,6 +1028,11 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
               {incident.isContinuation && (
                 <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[rgba(243,156,18,0.12)] border border-[rgba(243,156,18,0.3)] text-[#F39C12]">
                   carried over from prior log
+                </span>
+              )}
+              {incident.isOffRoute && (
+                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[rgba(107,71,220,0.12)] border border-[rgba(107,71,220,0.4)] text-[#6B47DC]">
+                  off route
                 </span>
               )}
             </div>
@@ -1060,6 +1069,10 @@ function IncidentCard({ incident, onRemove, onToggleHighlight, onEdit }: {
             className={cn('p-1.5 rounded transition-colors', incident.isHighlight ? 'text-[#E05206]' : 'text-[#4A5A72] hover:text-[#7A8BA8]')}>
             <AlertTriangle size={12} />
           </button>
+          <button onClick={onToggleOffRoute} title={incident.isOffRoute ? 'Mark as on route' : 'Mark as off route (excluded from totals)'}
+            className={cn('p-1.5 rounded transition-colors', incident.isOffRoute ? 'text-[#6B47DC]' : 'text-[#4A5A72] hover:text-[#7A8BA8]')}>
+            <MapPin size={12} />
+          </button>
           <button onClick={onRemove} className="p-1.5 rounded text-[#4A5A72] hover:text-red-400 transition-colors">
             <Trash2 size={12} />
           </button>
@@ -1089,18 +1102,21 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const cats = ['ALL', 'HIGHLIGHTS', ...Array.from(new Set(log.incidents.map(i => i.category)))]
+  const cats = ['ALL', 'HIGHLIGHTS', 'OFF_ROUTE', ...Array.from(new Set(log.incidents.map(i => i.category)))]
 
   const filtered = filter === 'ALL'        ? log.incidents
     : filter === 'HIGHLIGHTS'              ? log.incidents.filter(i => i.isHighlight)
+    : filter === 'OFF_ROUTE'               ? log.incidents.filter(i => i.isOffRoute)
     : log.incidents.filter(i => i.category === filter)
 
   const stats = {
     total:      log.incidents.filter(i => !i.isContinuation).length,
     highlights: log.incidents.filter(i => i.isHighlight && !i.isContinuation).length,
     critical:   log.incidents.filter(i => ['CRITICAL','HIGH'].includes(i.severity) && !i.isContinuation).length,
-    totalMins:  log.incidents.reduce((s, i) =>
-      s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0),
+    offRoute:   log.incidents.filter(i => !!i.isOffRoute).length,
+    routeMins:  log.incidents
+      .filter(i => !i.isOffRoute)
+      .reduce((s, i) => s + (i.isContinuation ? (i.delayDelta ?? 0) : (i.minutesDelay || 0)), 0),
     totalCan:   log.incidents.reduce((s, i) => s + (i.cancelled    || 0), 0),
     withArea:   log.incidents.filter(i => !!i.area).length,
   }
@@ -1138,14 +1154,15 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
       </div>
 
       {/* KPI stats bar */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 sm:grid-cols-7 gap-3">
         {[
-          { label: 'Total',         value: stats.total,                                                               color: '#4A6FA5' },
-          { label: 'Highlighted',   value: stats.highlights,                                                          color: '#E05206' },
-          { label: 'Critical/High', value: stats.critical,                                                            color: '#C0392B' },
-          { label: 'Delay (min)',   value: stats.totalMins.toLocaleString(),                                          color: '#F39C12' },
-          { label: 'Cancelled',     value: stats.totalCan,                                                            color: '#E05206' },
-          { label: 'Area codes',    value: `${stats.withArea}/${log.incidents.length}`,                               color: stats.withArea === log.incidents.length ? '#27AE60' : stats.withArea === 0 ? '#C0392B' : '#F39C12' },
+          { label: 'Total',          value: stats.total,                                                               color: '#4A6FA5' },
+          { label: 'Highlighted',    value: stats.highlights,                                                          color: '#E05206' },
+          { label: 'Critical/High',  value: stats.critical,                                                            color: '#C0392B' },
+          { label: 'Route Delay',    value: stats.routeMins.toLocaleString() + ' min',                                 color: '#F39C12' },
+          { label: 'Cancelled',      value: stats.totalCan,                                                            color: '#E05206' },
+          { label: 'Off Route',      value: stats.offRoute,                                                            color: '#6B47DC' },
+          { label: 'Area codes',     value: `${stats.withArea}/${log.incidents.length}`,                               color: stats.withArea === log.incidents.length ? '#27AE60' : stats.withArea === 0 ? '#C0392B' : '#F39C12' },
         ].map(s => (
           <div key={s.label} className="card p-3 text-center">
             <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
@@ -1159,6 +1176,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
         {cats.map(cat => {
           const count = cat === 'ALL'        ? stats.total
             : cat === 'HIGHLIGHTS'           ? stats.highlights
+            : cat === 'OFF_ROUTE'            ? stats.offRoute
             : log.incidents.filter(i => i.category === cat && !i.isContinuation).length
           const cfg = CATEGORY_CONFIG[cat as IncidentCategory]
           return (
@@ -1171,6 +1189,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
               )}>
               {cat === 'ALL' ? `All (${count})`
                 : cat === 'HIGHLIGHTS' ? `★ Highlights (${count})`
+                : cat === 'OFF_ROUTE'  ? `⊘ Off Route (${count})`
                 : `${cfg?.shortLabel || cat} (${count})`}
             </button>
           )
@@ -1189,6 +1208,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
             <IncidentCard key={inc.id} incident={inc}
               onRemove={() => onUpdate(log.incidents.filter(i => i.id !== inc.id))}
               onToggleHighlight={() => toggle(inc.id, 'isHighlight')}
+              onToggleOffRoute={() => toggle(inc.id, 'isOffRoute')}
               onEdit={updates => onUpdate(log.incidents.map(i => i.id === inc.id ? { ...i, ...updates } : i))} />
           ))}
         </div>
@@ -1307,14 +1327,18 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
     }
   }
 
-  const highlights = log.incidents.filter(i => i.isHighlight)
-  const totalDelay = log.incidents.reduce((s, i) => s + (i.minutesDelay || 0), 0)
-  const totalCan   = log.incidents.reduce((s, i) => s + (i.cancelled    || 0), 0)
+  const highlights   = log.incidents.filter(i => i.isHighlight)
+  const offRoute     = log.incidents.filter(i => i.isOffRoute)
+  const routeDelay   = log.incidents
+    .filter(i => !i.isOffRoute)
+    .reduce((s, i) => s + (i.minutesDelay || 0), 0)
+  const totalCan     = log.incidents.reduce((s, i) => s + (i.cancelled || 0), 0)
 
   const summaryRows = [
     { l: 'Total incidents',  v: log.incidents.length },
     { l: 'Highlighted',      v: highlights.length },
-    { l: 'Total delay',      v: `${totalDelay.toLocaleString()} min` },
+    { l: 'Off route',        v: offRoute.length },
+    { l: 'Route delay',      v: `${routeDelay.toLocaleString()} min` },
     { l: 'Cancellations',    v: totalCan },
     { l: 'Person Struck',     v: log.incidents.filter(i => ['FATALITY','PERSON_STRUCK'].includes(i.category)).length },
     { l: 'SPADs',             v: log.incidents.filter(i => i.category === 'SPAD').length },
