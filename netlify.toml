@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Netlify auto-installs the Next.js runtime, which handles routing and the
+# App Router build output. No outputDirectory override is needed.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# NEXT_PUBLIC_* variables are inlined into the client bundle at build time,
+# so they must be set in the Netlify UI (Site config → Environment variables)
+# scoped to "Builds" before the build runs. Changing one requires a rebuild.
+#
+# Optional — the app degrades gracefully without them:
+#   NEXT_PUBLIC_SUPABASE_URL              incident storage + trend charts
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY         (public anon key; secure with RLS)
+#   NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL    roster auto-import (sibling project)
+#   NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY
+#   NEXT_PUBLIC_ROSTERHUB_LINKS           roster groups, default "CTRL,SNDM"

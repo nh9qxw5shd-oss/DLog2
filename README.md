@@ -70,6 +70,34 @@ Vercel project → Settings → Domains.
 
 ---
 
+## Deployment — Netlify (alternative)
+
+This app runs equally well on Netlify. It is a fully client-side Next.js 14
+app — no API routes, no server actions, no SSR — so Netlify's built-in Next.js
+runtime handles it with no extra work. A `netlify.toml` is included.
+
+1. **Import** — https://app.netlify.com → Add new site → Import the repo.
+   Netlify auto-detects Next.js; build command `npm run build`.
+2. **Environment variables** — Site config → Environment variables. All are
+   **optional**; set only the features you want. Because they are all
+   `NEXT_PUBLIC_*`, they are inlined at **build time** — set them *before* the
+   build and **trigger a rebuild** after any change:
+
+   | Variable | Enables |
+   |----------|---------|
+   | `NEXT_PUBLIC_SUPABASE_URL` | Incident DB save + historical trend charts |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (same — public anon key, secure with RLS) |
+   | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL` | "Import roster" button |
+   | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY` | (same) |
+   | `NEXT_PUBLIC_ROSTERHUB_LINKS` | Roster groups (optional, default `CTRL,SNDM`) |
+
+   With none set, the full upload → parse → roster → PDF flow still works.
+3. **Deploy** — Click Deploy.
+
+> `vercel.json` is Vercel-specific and ignored by Netlify.
+
+---
+
 ## Local Development
 
 ```bash
