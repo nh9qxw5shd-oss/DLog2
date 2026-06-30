@@ -123,7 +123,11 @@ export default function ImportPage() {
 
       try {
         const log = makeHistoricLogState(periods[i], createdBy)
-        await upsertReportData(log)
+        // Additive merge: a historical period can bleed across the 06:00 boundary
+        // into a day that already has data. Additive mode adds new incidents,
+        // updates matching ones with the newest data, and leaves existing unique
+        // incidents untouched — never wiping a day that already holds records.
+        await upsertReportData(log, { additive: true })
         setRows((prev: RowResult[]) => prev.map((r: RowResult, idx: number) => idx === i ? { ...r, status: 'saved' } : r))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -190,7 +194,8 @@ export default function ImportPage() {
             <ul className="text-xs text-[#7A8BA8] space-y-1 pt-1 font-mono">
               <li>· Shift boundary: 06:00 → 06:00 next day</li>
               <li>· Incidents before 06:00 roll back to the previous period</li>
-              <li>· Each period upserts independently — safe to re-run</li>
+              <li>· Additive merge — bleeding into a day that already has data adds &amp; updates, never wipes</li>
+              <li>· Each period merges independently — safe to re-run</li>
             </ul>
           </div>
         )}
