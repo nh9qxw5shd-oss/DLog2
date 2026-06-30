@@ -351,6 +351,10 @@ export function parseCCILCSV(
  * Wraps a PeriodSlice in a minimal LogState for upsertReportData().
  * Roster, weather, and look-ahead fields are left at empty defaults since
  * this is historical data where those forward-looking fields have no meaning.
+ *
+ * The import page saves these with upsertReportData(log, { additive: true }) so a
+ * period that bleeds across the 06:00 boundary into a day that already holds data
+ * only adds/updates — it never wipes the existing records for that day.
  */
 export function makeHistoricLogState(
   slice: PeriodSlice,
