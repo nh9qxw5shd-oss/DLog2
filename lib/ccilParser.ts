@@ -937,23 +937,53 @@ export function reapplyHighlights(incidents: Incident[]): Incident[] {
 
 export function extractPeriod(text: string): { period: string; date: string } {
   const m = text.match(/(\d{1,2}\s+\w{3,9}\s+\d{4}\s+\d{2}:\d{2})\s+TO\s+(\d{1,2}\s+\w{3,9}\s+\d{4}\s+\d{2}:\d{2})/)
-  if (m) {
-    const period = `${m[1]} TO ${m[2]}`
-    const dm = m[1].match(/(\d{1,2})\s+(\w+)\s+(\d{4})/)
-    if (dm) {
-      const months: Record<string, string> = {
-        January:'01', February:'02', March:'03', April:'04', May:'05', June:'06',
-        July:'07', August:'08', September:'09', October:'10', November:'11', December:'12',
-        Jan:'01', Feb:'02', Mar:'03', Apr:'04', Jun:'06',
-        Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12',
-      }
-      return {
-        period,
-        date: `${dm[3]}-${months[dm[2]] || '01'}-${dm[1].padStart(2, '0')}`,
+  if (!m) return { period: 'Unknown Period', date: new Date().toISOString().split('T')[0] }
+
+  const months: Record<string, string> = {
+    January:'01', February:'02', March:'03', April:'04', May:'05', June:'06',
+    July:'07', August:'08', September:'09', October:'10', November:'11', December:'12',
+    Jan:'01', Feb:'02', Mar:'03', Apr:'04', Jun:'06',
+    Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12',
+  }
+
+  const parse = (s: string) => {
+    const dm = s.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/)
+    if (!dm) return null
+    return { day: parseInt(dm[1], 10), monName: dm[2], mon: parseInt(months[dm[2]] || '01', 10), year: parseInt(dm[3], 10), hhmm: s.slice(-5) }
+  }
+
+  const start = parse(m[1])
+  if (!start) return { period: `${m[1]} TO ${m[2]}`, date: new Date().toISOString().split('T')[0] }
+  const end = parse(m[2])
+
+  let year = start.year
+  let period = `${m[1]} TO ${m[2]}`
+
+  // Year-rollover sanity guard. A daily CCIL period spans ~24h, so its start and
+  // end should be ~1 day apart. Some source exports stamp the period START with a
+  // year behind the END — e.g. "22 May 2025 06:00 TO 23 May 2026 06:00" — which
+  // buries the report a full year in the past and leaves a hole in the trend
+  // charts. When start and end are implausibly far apart, the start year is the
+  // corrupt one: adopt the end's year (nudging back only for a true 31 Dec → 1 Jan
+  // boundary). A legitimate New-Year rollover spans ~1 day and is left untouched.
+  if (end) {
+    const startMs = Date.UTC(start.year, start.mon - 1, start.day)
+    const endMs   = Date.UTC(end.year,   end.mon - 1,   end.day)
+    const dayGap  = (endMs - startMs) / 86_400_000
+    if (dayGap > 7 || dayGap < -1) {
+      let fixedYear = end.year
+      if (Date.UTC(fixedYear, start.mon - 1, start.day) > endMs) fixedYear = end.year - 1
+      if (fixedYear !== start.year) {
+        year   = fixedYear
+        period = `${start.day} ${start.monName} ${fixedYear} ${start.hhmm} TO ${m[2]}`
       }
     }
   }
-  return { period: 'Unknown Period', date: new Date().toISOString().split('T')[0] }
+
+  return {
+    period,
+    date: `${year}-${months[start.monName] || '01'}-${String(start.day).padStart(2, '0')}`,
+  }
 }
 
 export function extractCreatedBy(text: string): string {
