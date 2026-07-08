@@ -15,7 +15,7 @@ import {
   SeasonMode, SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
   makeEmptySeasonalData,
 } from '@/lib/types'
-import { parseCCILText, extractPeriod, extractCreatedBy } from '@/lib/ccilParser'
+import { parseCCILText, extractPeriod, extractCreatedBy, parsePeriodHeader } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
 import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations } from '@/lib/supabaseClient'
 import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
@@ -154,7 +154,7 @@ function UploadStep({ onComplete }: {
       const tableText = htmlText ? htmlToTableText(htmlText) : ''
       const parseSource = tableText.trim() ? tableText : rawText
       setProgress('Parsing incidents…')
-      const { period, date } = extractPeriod(rawText || parseSource)
+      const { period, date, dateSource } = extractPeriod(rawText || parseSource)
       const createdBy  = extractCreatedBy(rawText || parseSource)
       const catSettings = readCategorySettings()
       const groupSeverities = Object.fromEntries(
@@ -162,7 +162,7 @@ function UploadStep({ onComplete }: {
       )
       const incidents  = parseCCILText(parseSource, catSettings.labelOverrides, groupSeverities)
       setProgress(`Done — ${incidents.length} incidents extracted`)
-      onComplete({ period, date, createdBy, incidents, rawLogText: rawText }, rawText)
+      onComplete({ period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {
       setError(e.message || 'Parse failed')
       setParsing(false)
@@ -841,6 +841,27 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
     </div>
   )
 
+  // Date-confidence checks. The log date drives report_date on every saved
+  // incident row, so a wrong value here silently corrupts the analytics
+  // (Insight) as well as this report — surface anything suspicious.
+  const todayISO = (() => {
+    const d = new Date()
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  })()
+  const periodDate = log.period ? parsePeriodHeader(log.period)?.date : undefined
+  const dateWarning =
+    log.dateSource === 'fallback'
+      ? 'The period header could not be read from the uploaded document, so the Log Date has defaulted to yesterday. Confirm the date and period below before generating.'
+    : log.date === todayISO && log.incidents.length > 0
+      ? 'Log Date is today. A daily log covers the previous 06:00→06:00 period, so this should normally be yesterday’s date — check before generating.'
+    : log.dateSource === 'header' && log.date &&
+      Math.abs(new Date(log.date + 'T00:00:00Z').getTime() - new Date(todayISO + 'T00:00:00Z').getTime()) > 7 * 86_400_000
+      ? `The document's period header reads as ${log.date}, more than a week from today. If this is a fresh daily log the header is probably wrong (a month typo, e.g. April for July, has caused this before) — correct the Log Date before generating.`
+    : periodDate && log.date && periodDate !== log.date
+      ? `The Period text reads as ${periodDate} but the Log Date is ${log.date}. One of them is wrong — the Log Date is what the report and analytics are filed under.`
+    : null
+
   return (
     <div className="space-y-6">
       <div>
@@ -863,6 +884,13 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
             className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none" />
         </div>
       </div>
+
+      {dateWarning && (
+        <div className="card p-3 border border-[rgba(243,156,18,0.4)] bg-[rgba(243,156,18,0.08)] flex items-start gap-2">
+          <AlertTriangle size={16} className="text-[#F39C12] mt-0.5 shrink-0" />
+          <p className="text-xs text-[#F39C12] leading-relaxed">{dateWarning}</p>
+        </div>
+      )}
 
       <FiveDaySection log={log} onChange={onChange} />
 

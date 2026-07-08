@@ -935,29 +935,80 @@ export function reapplyHighlights(incidents: Incident[]): Incident[] {
 
 // ─── Metadata ─────────────────────────────────────────────────────────────────
 
-export function extractPeriod(text: string): { period: string; date: string } {
-  const m = text.match(/(\d{1,2}\s+\w{3,9}\s+\d{4}\s+\d{2}:\d{2})\s+TO\s+(\d{1,2}\s+\w{3,9}\s+\d{4}\s+\d{2}:\d{2})/)
-  if (!m) return { period: 'Unknown Period', date: new Date().toISOString().split('T')[0] }
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-  const months: Record<string, string> = {
-    January:'01', February:'02', March:'03', April:'04', May:'05', June:'06',
-    July:'07', August:'08', September:'09', October:'10', November:'11', December:'12',
-    Jan:'01', Feb:'02', Mar:'03', Apr:'04', Jun:'06',
-    Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12',
+// Case-insensitive month-name → 1-12, matched on the first three letters so
+// "July", "jul" and "JULY" all resolve. Returns null when unrecognised —
+// never guesses, so a typo'd month can't silently become January.
+function monthNum(name: string): number | null {
+  const idx = MONTH_SHORT.findIndex(m => m.toLowerCase() === name.slice(0, 3).toLowerCase())
+  return idx >= 0 ? idx + 1 : null
+}
+
+// One side of the period header: "7 Jul 2026 06:00". The year is optional —
+// hand-edited documents have arrived without it (e.g. "07 April 06:00").
+const PERIOD_EDGE_RE = /(\d{1,2})\s+([A-Za-z]{3,9})(?:\s+(\d{4}))?\s+(\d{2}:\d{2})/
+// Full header: "<edge> TO <edge>". The separator is "TO" in canonical exports
+// but tolerate any case and -/–/— from hand-edited documents.
+const PERIOD_HEADER_RE = new RegExp(
+  PERIOD_EDGE_RE.source + String.raw`\s*(?:[Tt][Oo]|[-–—])\s*` + PERIOD_EDGE_RE.source
+)
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+// Local YYYY-MM-DD for `daysAgo` days before now.
+function localISODate(daysAgo = 0): string {
+  const d = new Date()
+  d.setDate(d.getDate() - daysAgo)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+export interface ExtractedPeriod {
+  period: string
+  date: string
+  // 'header'   → derived from the document's period header.
+  // 'fallback' → the header was missing or unreadable and the date defaulted
+  //              to YESTERDAY (a daily log covers the previous 06:00→06:00
+  //              period). The UI must ask the operator to confirm it.
+  dateSource: 'header' | 'fallback'
+}
+
+/**
+ * Parse a period header out of free text. Returns null when no header is
+ * found — callers decide the fallback. Exported so the UI can cross-check a
+ * hand-edited period string against the chosen log date.
+ */
+export function parsePeriodHeader(text: string): { period: string; date: string } | null {
+  const m = text.match(PERIOD_HEADER_RE)
+  if (!m) return null
+
+  const startMon = monthNum(m[2])
+  const endMon   = monthNum(m[6])
+  if (startMon == null || endMon == null) return null
+
+  const start = { day: parseInt(m[1], 10), mon: startMon, year: m[3] ? parseInt(m[3], 10) : null, hhmm: m[4] }
+  const end   = { day: parseInt(m[5], 10), mon: endMon,   year: m[7] ? parseInt(m[7], 10) : null, hhmm: m[8] }
+  if (start.day < 1 || start.day > 31 || end.day < 1 || end.day > 31) return null
+
+  // Resolve a missing year to whichever candidate lands the date nearest to
+  // now — a daily log is uploaded within a day or two of its period, so the
+  // true year is always the closest one.
+  const now = Date.now()
+  const resolveYear = (e: { day: number; mon: number; year: number | null }): number => {
+    if (e.year != null) return e.year
+    const thisYear = new Date().getFullYear()
+    let best = thisYear
+    let bestGap = Infinity
+    for (const cand of [thisYear - 1, thisYear, thisYear + 1]) {
+      const gap = Math.abs(Date.UTC(cand, e.mon - 1, e.day) - now)
+      if (gap < bestGap) { bestGap = gap; best = cand }
+    }
+    return best
   }
-
-  const parse = (s: string) => {
-    const dm = s.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/)
-    if (!dm) return null
-    return { day: parseInt(dm[1], 10), monName: dm[2], mon: parseInt(months[dm[2]] || '01', 10), year: parseInt(dm[3], 10), hhmm: s.slice(-5) }
-  }
-
-  const start = parse(m[1])
-  if (!start) return { period: `${m[1]} TO ${m[2]}`, date: new Date().toISOString().split('T')[0] }
-  const end = parse(m[2])
-
-  let year = start.year
-  let period = `${m[1]} TO ${m[2]}`
+  let startYear = resolveYear(start)
+  const endYear = resolveYear(end)
 
   // Year-rollover sanity guard. A daily CCIL period spans ~24h, so its start and
   // end should be ~1 day apart. Some source exports stamp the period START with a
@@ -966,24 +1017,29 @@ export function extractPeriod(text: string): { period: string; date: string } {
   // charts. When start and end are implausibly far apart, the start year is the
   // corrupt one: adopt the end's year (nudging back only for a true 31 Dec → 1 Jan
   // boundary). A legitimate New-Year rollover spans ~1 day and is left untouched.
-  if (end) {
-    const startMs = Date.UTC(start.year, start.mon - 1, start.day)
-    const endMs   = Date.UTC(end.year,   end.mon - 1,   end.day)
-    const dayGap  = (endMs - startMs) / 86_400_000
-    if (dayGap > 7 || dayGap < -1) {
-      let fixedYear = end.year
-      if (Date.UTC(fixedYear, start.mon - 1, start.day) > endMs) fixedYear = end.year - 1
-      if (fixedYear !== start.year) {
-        year   = fixedYear
-        period = `${start.day} ${start.monName} ${fixedYear} ${start.hhmm} TO ${m[2]}`
-      }
-    }
+  const endMs  = Date.UTC(endYear, end.mon - 1, end.day)
+  const dayGap = (endMs - Date.UTC(startYear, start.mon - 1, start.day)) / 86_400_000
+  if (dayGap > 7 || dayGap < -1) {
+    startYear = endYear
+    if (Date.UTC(startYear, start.mon - 1, start.day) > endMs) startYear = endYear - 1
   }
 
   return {
-    period,
-    date: `${year}-${months[start.monName] || '01'}-${String(start.day).padStart(2, '0')}`,
+    // Normalised to the canonical export form regardless of how the source
+    // header was written, so stored periods stay consistent.
+    period: `${pad2(start.day)} ${MONTH_SHORT[start.mon - 1]} ${startYear} ${start.hhmm} TO ` +
+            `${pad2(end.day)} ${MONTH_SHORT[end.mon - 1]} ${endYear} ${end.hhmm}`,
+    date: `${startYear}-${pad2(start.mon)}-${pad2(start.day)}`,
   }
+}
+
+export function extractPeriod(text: string): ExtractedPeriod {
+  const parsed = parsePeriodHeader(text)
+  if (parsed) return { ...parsed, dateSource: 'header' }
+  // No readable header. A daily log is compiled the morning after the 24-hour
+  // period it covers, so YESTERDAY is the operationally correct default — the
+  // old fallback of "today" silently mis-dated every affected upload.
+  return { period: 'Unknown Period', date: localISODate(1), dateSource: 'fallback' }
 }
 
 export function extractCreatedBy(text: string): string {

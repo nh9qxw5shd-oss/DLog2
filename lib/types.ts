@@ -222,6 +222,10 @@ export interface RosterData {
 
 export interface LogState {
   date: string               // YYYY-MM-DD
+  // How `date` was determined at upload: 'header' = parsed from the document's
+  // period header; 'fallback' = header unreadable, defaulted to yesterday and
+  // needs operator confirmation. Unset for blank/manual logs.
+  dateSource?: 'header' | 'fallback'
   period: string
   controlCentre: string
   createdBy?: string
