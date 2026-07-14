@@ -2,7 +2,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { LogState, Incident, RosterData, CATEGORY_CONFIG, IncidentCategory } from './types'
-import { backfillAreasByLocation, reapplyHighlights } from './ccilParser'
+import { backfillAreasByLocation, reapplyHighlights, londonNow, voteLogDate } from './ccilParser'
 
 // ─── Client singleton ─────────────────────────────────────────────────────────
 
@@ -309,9 +309,21 @@ function incidentMatchKey(r: {
 // only the incremental delay (delta) is recorded, so multi-day incidents don't
 // inflate totals.
 
+// Thrown by the log-date integrity gates below. `overridable` distinguishes
+// heuristic gates (operator may consciously bypass with force) from the
+// impossible-period gate (never bypassable).
+export class SaveBlockedError extends Error {
+  overridable: boolean
+  constructor(message: string, overridable: boolean) {
+    super(message)
+    this.name = 'SaveBlockedError'
+    this.overridable = overridable
+  }
+}
+
 export async function upsertReportData(
   log: LogState,
-  options: { additive?: boolean } = {},
+  options: { additive?: boolean; force?: boolean } = {},
 ): Promise<void> {
   const sb = getClient()
   if (!sb || !log.date) return
@@ -324,6 +336,80 @@ export async function upsertReportData(
   }
 
   const annotated = annotatedLog.incidents
+
+  // ─── Log-date integrity gates ─────────────────────────────────────────────
+  // report_date is the primary key of the whole analytics pipeline: one wrong
+  // value blanks a day in Insight AND corrupts the day it lands on (a later
+  // correctly-dated upload merges into it via the report_date unique key).
+  // Mis-dated logs have reached the DB three times (22 Jun, 23 Jun, 13 Jul
+  // 2026 — each time stamped with the upload day instead of the log day), so
+  // these are hard failures at the save boundary, not UI warnings.
+
+  // Gate 1 — impossible period. A log dated D covers D 06:00 → D+1 06:00
+  // Europe/London; if that period hasn't STARTED yet, the date cannot be
+  // right. This is exactly the recurring failure signature (a small-hours
+  // upload stamped with the new day instead of the day being reported).
+  // Never overridable: no genuine log describes a period in the future.
+  const now = londonNow()
+  if (log.date > now.date || (log.date === now.date && now.time < '06:00')) {
+    throw new SaveBlockedError(
+      `SAVE BLOCKED — Log Date looks wrong: the log is dated ${log.date}, but that ` +
+      `06:00→06:00 period has not started yet (it is now ${now.time} on ${now.date} UK time). ` +
+      `A daily log compiled overnight covers the PREVIOUS day — go back to the Roster step ` +
+      `and correct the Log Date.`,
+      false,
+    )
+  }
+
+  // Gate 2 — the log's own rows disagree. Freshly-started incidents (not
+  // continuations) always fall inside the log's period, and their CCIL header
+  // timestamps are machine-stamped — so a strong majority pointing at a
+  // different date means the Log Date is wrong, whatever the hand-edited
+  // period header said.
+  if (!options.force) {
+    const vote = voteLogDate(annotated, { excludeContinuations: true, minRows: 3 })
+    if (vote && vote.date !== log.date && vote.share >= 0.6) {
+      throw new SaveBlockedError(
+        `SAVE BLOCKED — Log Date looks wrong: ${vote.votes} of ${vote.total} newly-started ` +
+        `incidents in this document are timestamped inside the ${vote.date} 06:00→06:00 period, ` +
+        `but the Log Date is ${log.date}. Correct the Log Date on the Roster step ` +
+        `(or use Override if you are certain).`,
+        true,
+      )
+    }
+  }
+
+  // Gate 3 — collision with a different day's report. A legitimate re-upload
+  // of the same day shares most of its CCIL references with what is already
+  // stored; near-zero overlap means this date already holds a DIFFERENT
+  // day's log and saving would silently interleave two days' incidents
+  // (which is how 12+13 Jul 2026 ended up merged under one date).
+  if (!options.force) {
+    const { data: existingRep, error: exRepErr } = await sb
+      .from('reports').select('id').eq('report_date', log.date).maybeSingle()
+    if (exRepErr) throw new Error(`Report lookup failed: ${exRepErr.message}`)
+    if (existingRep) {
+      const { data: exInc, error: exIncErr } = await sb
+        .from('incidents').select('ccil').eq('report_id', existingRep.id)
+      if (exIncErr) throw new Error(`Incident lookup failed: ${exIncErr.message}`)
+      const existingCcils = new Set(
+        (exInc ?? []).map(r => (r.ccil ?? '').trim()).filter(Boolean))
+      if (existingCcils.size >= 5) {
+        const incoming = new Set(
+          annotated.map(i => (i.ccil ?? '').trim()).filter(Boolean))
+        const overlap = Array.from(existingCcils).filter(c => incoming.has(c)).length
+        if (overlap / existingCcils.size < 0.25) {
+          throw new SaveBlockedError(
+            `SAVE BLOCKED — ${log.date} already holds a report whose ${existingCcils.size} ` +
+            `incidents share almost nothing with this upload (${overlap} matching CCIL refs). ` +
+            `This looks like a different day's log filed under the same date. Check the Log ` +
+            `Date on the Roster step (or use Override to deliberately replace that report).`,
+            true,
+          )
+        }
+      }
+    }
+  }
 
   // Totals use delta delay for continuations, raw delay for first-seen incidents.
   // Off-route incidents are excluded — they are in the log for visibility only.

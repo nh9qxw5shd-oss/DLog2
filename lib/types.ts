@@ -155,6 +155,10 @@ export interface Incident {
   area?: string
   line?: string
   incidentStart?: string
+  // Full "YYYY-MM-DDTHH:MM" timestamp from the incident's CCIL header line.
+  // Machine-stamped by CCIL (unlike the hand-edited period header), so it is
+  // the trusted evidence for which 06:00→06:00 period the incident belongs to.
+  headerIsoDate?: string
   description: string
   events?: IncidentEvent[]
   cancelled?: number
@@ -223,9 +227,11 @@ export interface RosterData {
 export interface LogState {
   date: string               // YYYY-MM-DD
   // How `date` was determined at upload: 'header' = parsed from the document's
-  // period header; 'fallback' = header unreadable, defaulted to yesterday and
-  // needs operator confirmation. Unset for blank/manual logs.
-  dateSource?: 'header' | 'fallback'
+  // period header; 'rows' = set from the incident rows' own CCIL timestamps
+  // (operator accepted the row-derived date over a disagreeing header);
+  // 'fallback' = header unreadable, defaulted to yesterday and needs operator
+  // confirmation. Unset for blank/manual logs.
+  dateSource?: 'header' | 'rows' | 'fallback'
   period: string
   controlCentre: string
   createdBy?: string

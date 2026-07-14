@@ -721,6 +721,7 @@ function parseIncidentBlock(
     area: area || undefined,
     line: routeLine || undefined,
     incidentStart: startHHMM,
+    headerIsoDate: isoDate,
     description,
     events,
     cancelled,
@@ -963,6 +964,75 @@ function localISODate(daysAgo = 0): string {
   const d = new Date()
   d.setDate(d.getDate() - daysAgo)
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+// ─── 06:00→06:00 period-date helpers ─────────────────────────────────────────
+// A daily log for date D covers D 06:00 → D+1 06:00 (Europe/London). These
+// helpers pin every date decision to that convention so a log can be checked
+// against the clock and against its own incident rows.
+
+/** Map a "YYYY-MM-DDTHH:MM" timestamp to the date of the 06:00→06:00 period
+ *  it falls in: times before 06:00 belong to the previous day's period. */
+export function periodStartDateOf(isoDateTime: string): string {
+  const date = isoDateTime.slice(0, 10)
+  const hhmm = isoDateTime.slice(11, 16)
+  if (hhmm >= '06:00' || !/^\d{2}:\d{2}$/.test(hhmm)) return date
+  const [y, m, d] = date.split('-').map(Number)
+  const prev = new Date(Date.UTC(y, m - 1, d - 1))
+  return `${prev.getUTCFullYear()}-${pad2(prev.getUTCMonth() + 1)}-${pad2(prev.getUTCDate())}`
+}
+
+/** Wall-clock date and time in Europe/London, regardless of the machine's
+ *  timezone. Used for "has this log's period actually started yet?" checks. */
+export function londonNow(): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? ''
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${get('hour')}:${get('minute')}`,
+  }
+}
+
+/** Date of the 06:00→06:00 period in progress right now (Europe/London) —
+ *  the date a log being compiled at this moment should normally carry. */
+export function currentPeriodStartDate(): string {
+  const now = londonNow()
+  if (now.time >= '06:00') return now.date
+  const [y, m, d] = now.date.split('-').map(Number)
+  const prev = new Date(Date.UTC(y, m - 1, d - 1))
+  return `${prev.getUTCFullYear()}-${pad2(prev.getUTCMonth() + 1)}-${pad2(prev.getUTCDate())}`
+}
+
+export interface RowDateVote {
+  date: string        // the period-start date most incident rows agree on
+  votes: number       // rows voting for that date
+  total: number       // rows that carried a usable header timestamp
+  share: number       // votes / total
+}
+
+/** Majority-vote the log date from the incidents' own CCIL header timestamps.
+ *  Continuation incidents carry the timestamp of their ORIGINAL start (days
+ *  ago), so exclude them when the flag is available — freshly-started
+ *  incidents must lie inside the log's own period, making their vote exact.
+ *  Returns null when fewer than `minRows` usable rows exist. */
+export function voteLogDate(
+  incidents: Pick<Incident, 'headerIsoDate' | 'isContinuation'>[],
+  opts: { excludeContinuations?: boolean; minRows?: number } = {},
+): RowDateVote | null {
+  const { excludeContinuations = false, minRows = 3 } = opts
+  const usable = incidents.filter(i =>
+    i.headerIsoDate && (!excludeContinuations || !i.isContinuation))
+  if (usable.length < minRows) return null
+  const tally = new Map<string, number>()
+  for (const i of usable) {
+    const d = periodStartDateOf(i.headerIsoDate!)
+    tally.set(d, (tally.get(d) ?? 0) + 1)
+  }
+  const [date, votes] = Array.from(tally.entries()).sort((a, b) => b[1] - a[1])[0]
+  return { date, votes, total: usable.length, share: votes / usable.length }
 }
 
 export interface ExtractedPeriod {
