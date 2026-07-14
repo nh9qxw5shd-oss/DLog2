@@ -15,9 +15,12 @@ import {
   SeasonMode, SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
   makeEmptySeasonalData,
 } from '@/lib/types'
-import { parseCCILText, extractPeriod, extractCreatedBy, parsePeriodHeader } from '@/lib/ccilParser'
+import {
+  parseCCILText, extractPeriod, extractCreatedBy, parsePeriodHeader,
+  voteLogDate, londonNow, currentPeriodStartDate,
+} from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
-import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations } from '@/lib/supabaseClient'
+import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations, SaveBlockedError } from '@/lib/supabaseClient'
 import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
@@ -154,13 +157,28 @@ function UploadStep({ onComplete }: {
       const tableText = htmlText ? htmlToTableText(htmlText) : ''
       const parseSource = tableText.trim() ? tableText : rawText
       setProgress('Parsing incidents…')
-      const { period, date, dateSource } = extractPeriod(rawText || parseSource)
       const createdBy  = extractCreatedBy(rawText || parseSource)
       const catSettings = readCategorySettings()
       const groupSeverities = Object.fromEntries(
         Object.entries(catSettings.groups).map(([k, v]) => [k, v.severity])
       )
       const incidents  = parseCCILText(parseSource, catSettings.labelOverrides, groupSeverities)
+
+      // System-derived Log Date. Authority order:
+      //   1. The incidents' own CCIL header timestamps (machine-stamped by
+      //      CCIL — cannot be hand-edited into the wrong day). A clear
+      //      majority mapped onto the 06:00→06:00 grid IS the log date.
+      //   2. The document's period header (hand-edited; has been wrong).
+      //   3. Yesterday (the operational default for a morning upload).
+      // The operator never types this date in the normal flow — the Roster
+      // step displays it read-only with its provenance.
+      const header = extractPeriod(rawText || parseSource)
+      const vote = voteLogDate(incidents)
+      const rowsWin = !!(vote && vote.share >= 0.6)
+      const date       = rowsWin ? vote!.date : header.date
+      const dateSource = rowsWin ? 'rows' as const : header.dateSource
+      const period = header.period
+
       setProgress(`Done — ${incidents.length} incidents extracted`)
       onComplete({ period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {
@@ -744,6 +762,11 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
   const [importing, setImporting]       = useState(false)
   const [importMsg, setImportMsg]       = useState<string>('')
   const [importError, setImportError]   = useState<string>('')
+  // The Log Date is system-derived (incident timestamps → header → default)
+  // and displayed read-only. Manual editing exists only for exceptional cases
+  // (e.g. backfilling an old day) behind an explicit unlock — hand-typed
+  // dates are how days went missing from the analytics.
+  const [dateUnlocked, setDateUnlocked] = useState(false)
 
   const updateSlot = (shift: 'dayShift' | 'nightShift', idx: number, field: keyof ShiftSlot, value: string) => {
     const r = { ...log.roster }
@@ -843,17 +866,55 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
 
   // Date-confidence checks. The log date drives report_date on every saved
   // incident row, so a wrong value here silently corrupts the analytics
-  // (Insight) as well as this report — surface anything suspicious.
+  // (Insight) as well as this report. Two conditions are decisive and BLOCK
+  // progress (mirrored by hard gates at the save boundary in supabaseClient);
+  // the rest stay advisory.
   const todayISO = (() => {
     const d = new Date()
     const pad = (n: number) => n.toString().padStart(2, '0')
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   })()
+  const nowLdn = londonNow()
+  const activePeriodDate = currentPeriodStartDate()
+
+  // Blocker 1 — the chosen date's 06:00→06:00 period hasn't started yet. This
+  // is the recurring "Sunday vanished from Insight" failure: a small-hours
+  // upload stamped with the new day instead of the day being reported.
+  const periodNotStarted = !!log.date &&
+    (log.date > nowLdn.date || (log.date === nowLdn.date && nowLdn.time < '06:00'))
+
+  // Blocker 2 — the incidents' own machine-stamped CCIL timestamps point
+  // overwhelmingly at a different period than the chosen date. (Vote includes
+  // carried-over incidents, whose timestamps are legitimately older, so the
+  // threshold is high; the save-time gate re-checks precisely on fresh rows.)
+  const rowVote = voteLogDate(log.incidents)
+  const rowConflict = rowVote && rowVote.date !== log.date &&
+    rowVote.share >= 0.7 && rowVote.total >= 5 ? rowVote : null
+
+  const dateBlocker = periodNotStarted
+    ? {
+        text: `The Log Date is ${log.date}, but that 06:00→06:00 period has not started yet ` +
+              `(it is ${nowLdn.time} UK time). A log compiled overnight covers the previous ` +
+              `day — the period in progress right now is ${activePeriodDate}.`,
+        fixDate: activePeriodDate,
+        fixSource: undefined as 'rows' | undefined,
+      }
+    : rowConflict
+    ? {
+        text: `${rowConflict.votes} of ${rowConflict.total} incidents in this document are ` +
+              `timestamped inside the ${rowConflict.date} 06:00→06:00 period, but the Log Date ` +
+              `is ${log.date || 'not set'}. The incident timestamps are machine-stamped by ` +
+              `CCIL, so the Log Date (from the hand-edited header) is almost certainly wrong.`,
+        fixDate: rowConflict.date,
+        fixSource: 'rows' as const,
+      }
+    : null
+
   const periodDate = log.period ? parsePeriodHeader(log.period)?.date : undefined
-  const dateWarning =
+  const dateWarning = dateBlocker ? null :
     log.dateSource === 'fallback'
       ? 'The period header could not be read from the uploaded document, so the Log Date has defaulted to yesterday. Confirm the date and period below before generating.'
-    : log.date === todayISO && log.incidents.length > 0
+    : log.date === todayISO && log.incidents.length > 0 && log.dateSource !== 'rows'
       ? 'Log Date is today. A daily log covers the previous 06:00→06:00 period, so this should normally be yesterday’s date — check before generating.'
     : log.dateSource === 'header' && log.date &&
       Math.abs(new Date(log.date + 'T00:00:00Z').getTime() - new Date(todayISO + 'T00:00:00Z').getTime()) > 7 * 86_400_000
@@ -873,9 +934,28 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
       <div className="card p-4 grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs text-[#7A8BA8] mb-1 font-semibold uppercase tracking-wider">Log Date</label>
-          <input type="date" value={log.date}
-            onChange={e => onChange({ date: e.target.value })}
-            className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none font-mono" />
+          <div className="flex items-center gap-2">
+            <input type="date" value={log.date} disabled={!dateUnlocked}
+              onChange={e => onChange({ date: e.target.value })}
+              className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none font-mono disabled:opacity-70 disabled:cursor-not-allowed" />
+            {!dateUnlocked && (
+              <button onClick={() => setDateUnlocked(true)}
+                title="The Log Date is set by the system from the document itself. Unlock only for exceptional cases such as backfilling an old day."
+                className="shrink-0 px-2.5 py-2 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-xs rounded hover:text-white transition-colors">
+                Unlock
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[10px] text-[#4A5A72] leading-snug">
+            {log.dateSource === 'rows'
+              ? 'Set by the system from the incidents’ own CCIL timestamps.'
+              : log.dateSource === 'header'
+              ? 'Set by the system from the document’s period header.'
+              : log.dateSource === 'fallback'
+              ? 'Defaulted to yesterday — the document’s dates could not be read.'
+              : 'Default for a manually-entered log.'}
+            {dateUnlocked && ' Manual editing unlocked — integrity checks still apply on save.'}
+          </p>
         </div>
         <div>
           <label className="block text-xs text-[#7A8BA8] mb-1 font-semibold uppercase tracking-wider">Period</label>
@@ -884,6 +964,22 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
             className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none" />
         </div>
       </div>
+
+      {dateBlocker && (
+        <div className="card p-3 border border-[rgba(192,57,43,0.5)] bg-[rgba(192,57,43,0.1)] space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={16} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-red-400 leading-relaxed">
+              <span className="font-bold">Log Date blocked — </span>{dateBlocker.text}
+            </p>
+          </div>
+          <button
+            onClick={() => onChange({ date: dateBlocker.fixDate, dateSource: dateBlocker.fixSource })}
+            className="ml-6 px-3 py-1.5 bg-[#C0392B] text-white text-xs font-semibold rounded hover:bg-[#a93226] transition-colors">
+            Set Log Date to {dateBlocker.fixDate}
+          </button>
+        </div>
+      )}
 
       {dateWarning && (
         <div className="card p-3 border border-[rgba(243,156,18,0.4)] bg-[rgba(243,156,18,0.08)] flex items-start gap-2">
@@ -944,7 +1040,9 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
         <button onClick={onBack} className="px-6 py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">
           ← Back
         </button>
-        <button onClick={onNext} className="flex-1 py-2.5 bg-[#E05206] text-white text-sm font-semibold rounded hover:bg-[#c44804] transition-colors">
+        <button onClick={onNext} disabled={!!dateBlocker}
+          title={dateBlocker ? 'Fix the Log Date above to continue' : undefined}
+          className="flex-1 py-2.5 bg-[#E05206] text-white text-sm font-semibold rounded hover:bg-[#c44804] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#E05206] transition-colors">
           Continue to Review →
         </button>
       </div>
@@ -1312,11 +1410,12 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
   const [generating, setGenerating] = useState(false)
   const [done, setDone]             = useState(false)
   const [error, setError]           = useState('')
+  const [canOverride, setCanOverride] = useState(false)
   const [statusMsg, setStatusMsg]   = useState('')
   const [dbReports, setDbReports]   = useState<number | null>(null)
 
-  const handle = async () => {
-    setGenerating(true); setError(''); setStatusMsg('')
+  const handle = async (force = false) => {
+    setGenerating(true); setError(''); setCanOverride(false); setStatusMsg('')
 
     let chartImages: ChartImages | undefined
     // Use a local annotated copy so the PDF always reflects carryover status
@@ -1330,7 +1429,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
         pdfLog = await annotateWithContinuations(log)
 
         setStatusMsg('Syncing with database…')
-        await upsertReportData(pdfLog)
+        await upsertReportData(pdfLog, { force })
 
         // 2. Fetch all historical data for chart rendering
         setStatusMsg('Fetching historical trends…')
@@ -1350,6 +1449,9 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
+      // Heuristic date gates may be consciously overridden; the
+      // impossible-period gate may not.
+      setCanOverride(e instanceof SaveBlockedError && e.overridable)
     } finally {
       setGenerating(false); setStatusMsg('')
     }
@@ -1421,9 +1523,17 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
       </div>
 
       {error && (
-        <div className="flex items-start gap-3 p-4 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)]">
-          <AlertCircle size={16} className="text-red-400 mt-0.5 shrink-0" />
-          <p className="text-red-400 text-sm font-mono">{error}</p>
+        <div className="p-4 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)] space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={16} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-red-400 text-sm font-mono">{error}</p>
+          </div>
+          {canOverride && (
+            <button onClick={() => handle(true)} disabled={generating}
+              className="ml-7 px-3 py-1.5 border border-[rgba(192,57,43,0.5)] text-red-400 text-xs font-semibold rounded hover:bg-[rgba(192,57,43,0.15)] disabled:opacity-50 transition-colors">
+              I have verified the Log Date is correct — save anyway
+            </button>
+          )}
         </div>
       )}
 
@@ -1438,7 +1548,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
       )}
 
       <div className="space-y-2">
-        <button onClick={handle} disabled={generating}
+        <button onClick={() => handle()} disabled={generating}
           className={cn(
             'w-full py-3 text-white text-sm font-bold rounded flex items-center justify-center gap-3 transition-all',
             generating ? 'bg-[#4A6FA5] cursor-not-allowed' : 'bg-[#E05206] hover:bg-[#c44804]'
@@ -1464,12 +1574,13 @@ export default function Home() {
   const [log,  setLog]  = useState<LogState>(BLANK_LOG)
   const [knownNames, setKnownNames] = useState<string[]>([])
 
-  // Set today's date safely after mount — avoids SSR/client hydration mismatch
+  // Set a default date safely after mount — avoids SSR/client hydration
+  // mismatch. Default to the date of the 06:00→06:00 period currently in
+  // progress: for a night-shift operator compiling a blank log at 02:00 that
+  // is YESTERDAY's date, not today's — the old today-default is how logs got
+  // filed a day late and blanked their real day in the analytics.
   useEffect(() => {
-    const d = new Date()
-    const pad = (n: number) => n.toString().padStart(2, '0')
-    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    setLog(prev => prev.date ? prev : { ...prev, date: today })
+    setLog(prev => prev.date ? prev : { ...prev, date: currentPeriodStartDate() })
   }, [])
 
   // Preload the rosterhub staff directory so manual entry has typeahead even
