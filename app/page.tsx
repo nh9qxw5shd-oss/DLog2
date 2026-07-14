@@ -157,13 +157,28 @@ function UploadStep({ onComplete }: {
       const tableText = htmlText ? htmlToTableText(htmlText) : ''
       const parseSource = tableText.trim() ? tableText : rawText
       setProgress('Parsing incidents…')
-      const { period, date, dateSource } = extractPeriod(rawText || parseSource)
       const createdBy  = extractCreatedBy(rawText || parseSource)
       const catSettings = readCategorySettings()
       const groupSeverities = Object.fromEntries(
         Object.entries(catSettings.groups).map(([k, v]) => [k, v.severity])
       )
       const incidents  = parseCCILText(parseSource, catSettings.labelOverrides, groupSeverities)
+
+      // System-derived Log Date. Authority order:
+      //   1. The incidents' own CCIL header timestamps (machine-stamped by
+      //      CCIL — cannot be hand-edited into the wrong day). A clear
+      //      majority mapped onto the 06:00→06:00 grid IS the log date.
+      //   2. The document's period header (hand-edited; has been wrong).
+      //   3. Yesterday (the operational default for a morning upload).
+      // The operator never types this date in the normal flow — the Roster
+      // step displays it read-only with its provenance.
+      const header = extractPeriod(rawText || parseSource)
+      const vote = voteLogDate(incidents)
+      const rowsWin = !!(vote && vote.share >= 0.6)
+      const date       = rowsWin ? vote!.date : header.date
+      const dateSource = rowsWin ? 'rows' as const : header.dateSource
+      const period = header.period
+
       setProgress(`Done — ${incidents.length} incidents extracted`)
       onComplete({ period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText)
     } catch (e: any) {
@@ -747,6 +762,11 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
   const [importing, setImporting]       = useState(false)
   const [importMsg, setImportMsg]       = useState<string>('')
   const [importError, setImportError]   = useState<string>('')
+  // The Log Date is system-derived (incident timestamps → header → default)
+  // and displayed read-only. Manual editing exists only for exceptional cases
+  // (e.g. backfilling an old day) behind an explicit unlock — hand-typed
+  // dates are how days went missing from the analytics.
+  const [dateUnlocked, setDateUnlocked] = useState(false)
 
   const updateSlot = (shift: 'dayShift' | 'nightShift', idx: number, field: keyof ShiftSlot, value: string) => {
     const r = { ...log.roster }
@@ -894,7 +914,7 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
   const dateWarning = dateBlocker ? null :
     log.dateSource === 'fallback'
       ? 'The period header could not be read from the uploaded document, so the Log Date has defaulted to yesterday. Confirm the date and period below before generating.'
-    : log.date === todayISO && log.incidents.length > 0
+    : log.date === todayISO && log.incidents.length > 0 && log.dateSource !== 'rows'
       ? 'Log Date is today. A daily log covers the previous 06:00→06:00 period, so this should normally be yesterday’s date — check before generating.'
     : log.dateSource === 'header' && log.date &&
       Math.abs(new Date(log.date + 'T00:00:00Z').getTime() - new Date(todayISO + 'T00:00:00Z').getTime()) > 7 * 86_400_000
@@ -914,9 +934,28 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
       <div className="card p-4 grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs text-[#7A8BA8] mb-1 font-semibold uppercase tracking-wider">Log Date</label>
-          <input type="date" value={log.date}
-            onChange={e => onChange({ date: e.target.value })}
-            className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none font-mono" />
+          <div className="flex items-center gap-2">
+            <input type="date" value={log.date} disabled={!dateUnlocked}
+              onChange={e => onChange({ date: e.target.value })}
+              className="w-full bg-[#0A0F1E] text-white text-sm px-3 py-2 rounded border border-[rgba(74,111,165,0.25)] focus:border-[#E05206] outline-none font-mono disabled:opacity-70 disabled:cursor-not-allowed" />
+            {!dateUnlocked && (
+              <button onClick={() => setDateUnlocked(true)}
+                title="The Log Date is set by the system from the document itself. Unlock only for exceptional cases such as backfilling an old day."
+                className="shrink-0 px-2.5 py-2 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-xs rounded hover:text-white transition-colors">
+                Unlock
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[10px] text-[#4A5A72] leading-snug">
+            {log.dateSource === 'rows'
+              ? 'Set by the system from the incidents’ own CCIL timestamps.'
+              : log.dateSource === 'header'
+              ? 'Set by the system from the document’s period header.'
+              : log.dateSource === 'fallback'
+              ? 'Defaulted to yesterday — the document’s dates could not be read.'
+              : 'Default for a manually-entered log.'}
+            {dateUnlocked && ' Manual editing unlocked — integrity checks still apply on save.'}
+          </p>
         </div>
         <div>
           <label className="block text-xs text-[#7A8BA8] mb-1 font-semibold uppercase tracking-wider">Period</label>

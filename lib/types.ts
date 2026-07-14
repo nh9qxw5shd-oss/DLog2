@@ -226,11 +226,13 @@ export interface RosterData {
 
 export interface LogState {
   date: string               // YYYY-MM-DD
-  // How `date` was determined at upload: 'header' = parsed from the document's
-  // period header; 'rows' = set from the incident rows' own CCIL timestamps
-  // (operator accepted the row-derived date over a disagreeing header);
-  // 'fallback' = header unreadable, defaulted to yesterday and needs operator
-  // confirmation. Unset for blank/manual logs.
+  // How `date` was system-derived at upload, in authority order:
+  // 'rows'     = from the incident rows' own machine-stamped CCIL timestamps
+  //              (primary — a clear majority mapped onto the 06:00→06:00 grid);
+  // 'header'   = from the document's hand-edited period header (used only
+  //              when too few rows agree);
+  // 'fallback' = neither readable, defaulted to yesterday and needs operator
+  //              confirmation. Unset for blank/manual logs.
   dateSource?: 'header' | 'rows' | 'fallback'
   period: string
   controlCentre: string
