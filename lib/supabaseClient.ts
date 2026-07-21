@@ -1,7 +1,10 @@
 'use client'
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { LogState, Incident, RosterData, CATEGORY_CONFIG, IncidentCategory } from './types'
+import {
+  LogState, Incident, RosterData, CATEGORY_CONFIG, IncidentCategory,
+  HazardLevel, WeatherRisk, deriveWeatherLevel, worseHazard,
+} from './types'
 import { backfillAreasByLocation, reapplyHighlights, londonNow, voteLogDate } from './ccilParser'
 
 // ─── Client singleton ─────────────────────────────────────────────────────────
@@ -289,6 +292,119 @@ function incidentMatchKey(r: {
     .join('|')
 }
 
+// ─── Daily weather statement (5 Day Look Ahead persistence) ───────────────────
+// The look-ahead compiled with log date D is forward-looking from the morning
+// the report is generated (D+1): column i forecasts date D+1+i. One row is
+// written per forecast date so analytics can join a day's weather to that
+// day's incidents on weather_date = report_date.
+//
+// Newest-source-wins: a forecast for date X can be written by the reports of
+// logs X-5 … X-1, and the closest report carries the most up-to-date
+// statement. An older report saved out of order (a backfill) never clobbers a
+// newer statement. The value that finally sticks for X is the FIRST column of
+// the report generated the morning of X — the last statement issued before
+// X's own log exists.
+
+function addDaysIso(isoDate: string, n: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+}
+
+async function upsertDailyWeather(sb: SupabaseClient, log: LogState): Promise<void> {
+  if (!log.date || !log.fiveDayWeather) return
+
+  const rows = Array.from({ length: 5 }, (_, i) => {
+    const em = log.fiveDayWeather.eastMidlands[i] ?? { risks: {} }
+    const ln = log.fiveDayWeather.londonNorth[i]  ?? { risks: {} }
+    const emLevel: HazardLevel = deriveWeatherLevel(em)
+    const lnLevel: HazardLevel = deriveWeatherLevel(ln)
+    const riskTypes = Array.from(new Set([
+      ...Object.keys(em.risks), ...Object.keys(ln.risks),
+    ]))
+    return {
+      weather_date:        addDaysIso(log.date, i + 1),
+      source_report_date:  log.date,
+      day_offset:          i + 1,
+      east_midlands_risks: em.risks,
+      london_north_risks:  ln.risks,
+      east_midlands_level: emLevel,
+      london_north_level:  lnLevel,
+      overall_level:       worseHazard(emLevel, lnLevel),
+      risk_types:          riskTypes,
+      risk_note:           log.lookAheadNotes?.risks[i] ?? null,
+      toc_note:            log.lookAheadNotes?.toc[i]   ?? null,
+      foc_note:            log.lookAheadNotes?.foc[i]   ?? null,
+      updated_at:          new Date().toISOString(),
+    }
+  })
+
+  const { data: existing, error: exErr } = await sb
+    .from('weather_lookahead')
+    .select('weather_date, source_report_date')
+    .in('weather_date', rows.map(r => r.weather_date))
+  if (exErr) throw new Error(`Weather look-ahead lookup failed: ${exErr.message}`)
+
+  const existingSource = new Map(
+    (existing ?? []).map(r => [r.weather_date as string, r.source_report_date as string]))
+
+  // >= so re-generating the same day's report updates its own statement.
+  const winners = rows.filter(r => {
+    const prev = existingSource.get(r.weather_date)
+    return !prev || r.source_report_date >= prev
+  })
+  if (winners.length === 0) return
+
+  const { error } = await sb
+    .from('weather_lookahead')
+    .upsert(winners, { onConflict: 'weather_date', ignoreDuplicates: false })
+  if (error) throw new Error(`Weather look-ahead upsert failed: ${error.message}`)
+}
+
+export interface DailyWeatherDay {
+  date:              string                 // YYYY-MM-DD, joins to report_date
+  sourceReportDate:  string
+  eastMidlandsRisks: Partial<Record<WeatherRisk, string>>
+  londonNorthRisks:  Partial<Record<WeatherRisk, string>>
+  eastMidlandsLevel: HazardLevel
+  londonNorthLevel:  HazardLevel
+  overallLevel:      HazardLevel            // worst of both regions; GREEN = normal
+  riskTypes:         WeatherRisk[]          // union across both regions
+  riskNote:          string | null
+}
+
+export async function fetchWeatherHistory(
+  windowDays = ANALYTICS_WINDOW_DAYS,
+): Promise<DailyWeatherDay[]> {
+  const sb = getClient()
+  if (!sb) return []
+
+  const today = new Date()
+  const todayDate = today.toISOString().slice(0, 10)
+  const cutoff = new Date(today)
+  cutoff.setDate(cutoff.getDate() - windowDays + 1)
+  const cutoffDate = cutoff.toISOString().slice(0, 10)
+
+  const { data, error } = await sb
+    .from('weather_lookahead')
+    .select('weather_date, source_report_date, east_midlands_risks, london_north_risks, east_midlands_level, london_north_level, overall_level, risk_types, risk_note')
+    .gte('weather_date', cutoffDate)
+    .lte('weather_date', todayDate)
+    .order('weather_date', { ascending: true })
+  if (error) throw new Error(`Weather history fetch failed: ${error.message}`)
+
+  return (data ?? []).map(r => ({
+    date:              r.weather_date,
+    sourceReportDate:  r.source_report_date,
+    eastMidlandsRisks: r.east_midlands_risks ?? {},
+    londonNorthRisks:  r.london_north_risks  ?? {},
+    eastMidlandsLevel: r.east_midlands_level as HazardLevel,
+    londonNorthLevel:  r.london_north_level  as HazardLevel,
+    overallLevel:      r.overall_level       as HazardLevel,
+    riskTypes:         (r.risk_types ?? []) as WeatherRisk[],
+    riskNote:          r.risk_note,
+  }))
+}
+
 // ─── Upsert ───────────────────────────────────────────────────────────────────
 // De-duplication: upsert on report_date (unique constraint).
 //
@@ -443,6 +559,12 @@ export async function upsertReportData(
   if (reportErr) throw new Error(`Report upsert failed: ${reportErr.message}`)
 
   const reportId = reportRow.id
+
+  // Persist the 5 Day Look Ahead statement against the dates it forecasts.
+  // Only the reviewed interactive flow reaches here — the additive bulk-import
+  // path returns earlier and carries no weather data, so historical imports
+  // can never overwrite a real statement with empty defaults.
+  await upsertDailyWeather(sb, log)
 
   if (annotated.length === 0) return
 

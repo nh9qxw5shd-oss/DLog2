@@ -44,6 +44,10 @@ export function deriveWeatherLevel(day: DayWeather): HazardLevel {
   return max
 }
 
+export function worseHazard(a: HazardLevel, b: HazardLevel): HazardLevel {
+  return HAZARD_RANK[a] >= HAZARD_RANK[b] ? a : b
+}
+
 export function deriveDaysFromDate(isoDate: string): string[] {
   const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
   if (!isoDate) return ['Day 1','Day 2','Day 3','Day 4','Day 5']
