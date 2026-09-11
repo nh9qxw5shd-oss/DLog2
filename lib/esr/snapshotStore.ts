@@ -5,7 +5,7 @@
 // public anon key, which migration 009 permits.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { EsrRow, EsrDiff } from './types'
+import { EsrRow, EsrDiff, EsrFieldChange } from './types'
 
 export function getServerSupabase(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -153,6 +153,53 @@ export async function fetchPriorBaseline(sb: SupabaseClient, routeCode: string, 
     .eq('snapshot_date', date)
   if (error) throw new Error(`ESR baseline fetch failed: ${error.message}`)
   return { date, capturedAt, rows: (data as SnapshotDbRow[]).map(fromDb) }
+}
+
+// All rows for one stored snapshot date.
+export async function fetchSnapshotRows(sb: SupabaseClient, routeCode: string, snapshotDate: string): Promise<EsrRow[]> {
+  const { data, error } = await sb
+    .from('esr_snapshots')
+    .select('*')
+    .eq('route_code', routeCode)
+    .eq('snapshot_date', snapshotDate)
+  if (error) throw new Error(`ESR snapshot fetch failed: ${error.message}`)
+  return (data as SnapshotDbRow[]).map(fromDb)
+}
+
+export interface StoredRun {
+  snapshotDate: string
+  capturedAt: string
+  reportDate: string | null
+  baselineDate: string | null
+  esrCount: number
+  diff: { new: EsrRow[]; amended: Array<{ row: EsrRow; prior: EsrRow; changes: EsrFieldChange[] }>; removed: EsrRow[] }
+}
+
+// The most recent run row for the route (any date), with its stored diff.
+export async function fetchLatestRun(sb: SupabaseClient, routeCode: string): Promise<StoredRun | null> {
+  const { data, error } = await sb
+    .from('esr_snapshot_runs')
+    .select('snapshot_date, captured_at, report_date, baseline_date, esr_count, diff')
+    .eq('route_code', routeCode)
+    .order('snapshot_date', { ascending: false })
+    .order('captured_at', { ascending: false })
+    .limit(1)
+  if (error) throw new Error(`ESR run lookup failed: ${error.message}`)
+  const r = data?.[0]
+  if (!r) return null
+  const d = (r.diff && typeof r.diff === 'object') ? r.diff as Partial<StoredRun['diff']> : {}
+  return {
+    snapshotDate: r.snapshot_date,
+    capturedAt: r.captured_at,
+    reportDate: r.report_date ?? null,
+    baselineDate: r.baseline_date ?? null,
+    esrCount: r.esr_count ?? 0,
+    diff: {
+      new: Array.isArray(d.new) ? d.new : [],
+      amended: Array.isArray(d.amended) ? d.amended : [],
+      removed: Array.isArray(d.removed) ? d.removed : [],
+    },
+  }
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────

@@ -1550,13 +1550,18 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
                   ({esr.counts.active} imposed · {esr.counts.new} new · {esr.counts.amended} amended · {esr.counts.removed} removed
                   {esr.baselineDate ? ` vs ${esr.baselineDate}` : ' · first snapshot'})
                 </span>
-                {esr.dryRun
+                {esr.source === 'stored'
+                  ? <span className="text-amber-400" title={esr.liveError}>— from stored snapshot, live pull unavailable</span>
+                  : esr.dryRun
                   ? <span className="text-amber-400">— snapshot not stored (Test Mode)</span>
                   : !esr.persisted && <span className="text-amber-400">— snapshot NOT stored</span>}
               </div>
-            : <div className="flex items-center gap-2 text-amber-400">
-                <AlertTriangle size={11} />
-                Emergency Speed Restrictions unavailable — {esr.message}
+            : <div className="flex items-start gap-2 text-amber-400">
+                <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+                <span>
+                  Emergency Speed Restrictions unavailable — {esr.message}
+                  {esr.detail && <span className="block text-[#7A8BA8] font-mono">{esr.detail}</span>}
+                </span>
               </div>
           }
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}

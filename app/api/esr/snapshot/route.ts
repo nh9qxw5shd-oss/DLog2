@@ -1,31 +1,32 @@
-// ─── POST /api/esr/snapshot ───────────────────────────────────────────────────
-// Called by the log build stage. Pulls the route's currently imposed ESRs from
-// NRSDB (server-side, with the configured account), stores today's snapshot in
-// Supabase, diffs it against the most recent prior snapshot and returns the
-// classified list for the PDF.
+// ─── /api/esr/snapshot ────────────────────────────────────────────────────────
+// POST — called by the log build stage. Tries a live pull of the route's
+// imposed ESRs from NRSDB (server-side, with the configured account), stores
+// today's snapshot, diffs against the previous one and returns the classified
+// list for the PDF. If the live pull is not possible — nrsdb.uk's host
+// bot-protection refuses logins from datacentre IPs, which includes Vercel
+// and Netlify functions — it falls back to the latest snapshot stored by
+// /api/esr/ingest and says so in the result (source: 'stored', liveError).
 //
 // Body: { "reportDate": "YYYY-MM-DD", "dryRun": false }
 //   reportDate — the DLog2 log date, recorded on the run row
 //   dryRun     — Test Mode: scrape + baseline diff as normal, but write nothing
 //
-// Server-only env (never NEXT_PUBLIC_*):
-//   NRSDB_EMAIL, NRSDB_PASSWORD      — required; without them the response is
-//                                      { ok:false, reason:'not_configured' }
-//   NRSDB_ROUTECODE                  — default "EM"
-//   NRSDB_FILTER                     — default "imposed"
-//   SUPABASE_SERVICE_ROLE_KEY        — preferred for writes; falls back to the
-//                                      public anon key (migration 009 allows it)
-//   SUPABASE_URL                     — falls back to NEXT_PUBLIC_SUPABASE_URL
+// GET ?probe=1 — diagnostics for fault-finding a deployment: which env vars
+// are present (booleans only), what is stored, and the outcome of a live
+// login attempt (status, final URL, whether the edge blocked it). No secrets.
 //
-// The scrape result is cached in-process for a short window so repeated
-// "Regenerate PDF" clicks (or two operators building at once) do not hammer
-// NRSDB's login endpoint.
+// Server-only env (never NEXT_PUBLIC_*):
+//   NRSDB_EMAIL, NRSDB_PASSWORD      — enable the live pull
+//   NRSDB_ROUTECODE / NRSDB_FILTER   — default "EM" / "imposed"
+//   SUPABASE_SERVICE_ROLE_KEY        — preferred for writes (anon key fallback)
+//   SUPABASE_URL                     — falls back to NEXT_PUBLIC_SUPABASE_URL
+//   ESR_INGEST_TOKEN                 — see /api/esr/ingest
 
 import { NextRequest, NextResponse } from 'next/server'
-import { NrsdbClient, NrsdbAuthError, NrsdbFetchError, NrsdbPayloadError } from '@/lib/esr/nrsdbClient'
-import { extractEsrList, flattenPull, diffRows } from '@/lib/esr/diff'
-import { getServerSupabase, fetchPriorBaseline, persistSnapshot } from '@/lib/esr/snapshotStore'
-import type { EsrSnapshotResponse, EsrSnapshotResult, EsrSnapshotFailure, EsrRow, EsrStatus, EsrFieldChange } from '@/lib/esr/types'
+import { NrsdbClient, NrsdbAuthError, NrsdbFetchError, NrsdbPayloadError, LoginOutcome } from '@/lib/esr/nrsdbClient'
+import { buildFromPayload, loadStoredResult } from '@/lib/esr/pipeline'
+import { getServerSupabase, fetchLatestRun } from '@/lib/esr/snapshotStore'
+import type { EsrSnapshotResponse, EsrSnapshotResult, EsrSnapshotFailure } from '@/lib/esr/types'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,24 +34,47 @@ export const dynamic = 'force-dynamic'
 const CACHE_TTL_MS = 60_000
 let cache: { at: number; key: string; result: EsrSnapshotResult } | null = null
 
-function londonDateOf(d: Date): string {
-  // en-CA gives YYYY-MM-DD; Europe/London handles BST/GMT.
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+function env(name: string): string {
+  // Tolerate the usual paste accidents: surrounding quotes, trailing newline.
+  return (process.env[name] || '').trim().replace(/^["']|["']$/g, '')
 }
 
-function fail(reason: EsrSnapshotFailure['reason'], message: string, status = 200): NextResponse<EsrSnapshotResponse> {
-  return NextResponse.json({ ok: false, reason, message }, { status })
+function fail(reason: EsrSnapshotFailure['reason'], message: string, detail?: string): NextResponse<EsrSnapshotResponse> {
+  return NextResponse.json({ ok: false, reason, message, ...(detail ? { detail } : {}) })
+}
+
+type LiveOutcome =
+  | { ok: true; payload: unknown }
+  | { ok: false; reason: EsrSnapshotFailure['reason']; message: string; detail?: string }
+
+async function livePull(email: string, password: string, routeCode: string, filter: string): Promise<LiveOutcome> {
+  try {
+    const client = new NrsdbClient({ email, password })
+    const login = await client.loginDetailed()
+    if (!login.ok) {
+      return {
+        ok: false,
+        reason: login.blocked ? 'blocked' : 'auth_failed',
+        message: login.message,
+        detail: `HTTP ${login.status} · landed on ${login.finalUrl} · ${login.cookies} cookie(s)${login.stackProtect ? ' · x-stackprotect-id present' : ''}${login.bodySnippet ? ` · "${login.bodySnippet}"` : ''}`,
+      }
+    }
+    return { ok: true, payload: await client.getEsrs(routeCode, filter) }
+  } catch (e) {
+    if (e instanceof NrsdbAuthError)    return { ok: false, reason: 'auth_failed',  message: e.message }
+    if (e instanceof NrsdbPayloadError) return { ok: false, reason: 'bad_payload',  message: e.message }
+    if (e instanceof NrsdbFetchError)   return { ok: false, reason: e.message.includes('403') ? 'blocked' : 'fetch_failed', message: e.message }
+    return { ok: false, reason: 'error', message: (e as Error).message || 'Unexpected error contacting NRSDB.' }
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const email    = process.env.NRSDB_EMAIL
-  const password = process.env.NRSDB_PASSWORD
-  const routeCode = (process.env.NRSDB_ROUTECODE || 'EM').trim().toUpperCase()
-  const filter    = (process.env.NRSDB_FILTER || 'imposed').trim()
-
-  if (!email || !password) {
-    return fail('not_configured', 'NRSDB_EMAIL / NRSDB_PASSWORD are not set on the server.')
-  }
+  const email     = env('NRSDB_EMAIL')
+  const password  = env('NRSDB_PASSWORD')
+  const routeCode = (env('NRSDB_ROUTECODE') || 'EM').toUpperCase()
+  const filter    = env('NRSDB_FILTER') || 'imposed'
+  const credsSet  = !!(email && password)
+  const sb        = getServerSupabase()
 
   let reportDate: string | null = null
   let dryRun = false
@@ -68,97 +92,89 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(dryRun ? { ...cache.result, dryRun: true } : cache.result)
   }
 
-  // 1. Scrape ──────────────────────────────────────────────────────────────
-  let payload: unknown
-  try {
-    const client = new NrsdbClient({ email, password })
-    if (!(await client.login())) {
-      return fail('auth_failed', 'NRSDB login failed — check NRSDB_EMAIL / NRSDB_PASSWORD.')
+  // 1. Live pull ───────────────────────────────────────────────────────────
+  let live: LiveOutcome = { ok: false, reason: 'not_configured', message: 'NRSDB_EMAIL / NRSDB_PASSWORD are not set on the server.' }
+  if (credsSet) live = await livePull(email, password, routeCode, filter)
+
+  if (live.ok) {
+    const result = await buildFromPayload({ payload: live.payload, routeCode, reportDate, dryRun, sb })
+    if (result.ok) {
+      if (result.persisted) cache = { at: Date.now(), key: cacheKey, result }
+      return NextResponse.json(result)
     }
-    payload = await client.getEsrs(routeCode, filter)
-  } catch (e) {
-    if (e instanceof NrsdbAuthError)    return fail('auth_failed', e.message)
-    if (e instanceof NrsdbPayloadError) return fail('bad_payload', e.message)
-    if (e instanceof NrsdbFetchError)   return fail('fetch_failed', e.message)
-    return fail('error', (e as Error).message || 'Unexpected error contacting NRSDB.')
+    live = { ok: false, reason: result.reason, message: result.message }
   }
 
-  const list = extractEsrList(payload)
-  if (!list) return fail('bad_payload', 'NRSDB response did not contain an ESR list.')
-  const rows = flattenPull(list)
-  if (rows.length === 0) {
-    // An empty pull almost certainly means the session/payload is wrong, not
-    // that the route has no restrictions. Do not overwrite today's snapshot.
-    return fail('bad_payload', `NRSDB returned no imposed ESRs for route ${routeCode}; snapshot not taken.`)
-  }
-
-  // 2. Baseline + diff ─────────────────────────────────────────────────────
-  const now = new Date()
-  const capturedAt = now.toISOString()
-  const snapshotDate = londonDateOf(now)
-
-  const sb = getServerSupabase()
-  let baselineDate: string | null = null
-  let baselineCapturedAt: string | null = null
-  let baselineRows: EsrRow[] = []
-  let persistError: string | undefined
-
+  // 2. Fall back to the latest stored snapshot (fed by /api/esr/ingest) ───
   if (sb) {
     try {
-      const baseline = await fetchPriorBaseline(sb, routeCode, snapshotDate)
-      if (baseline) {
-        baselineDate = baseline.date
-        baselineCapturedAt = baseline.capturedAt
-        baselineRows = baseline.rows
+      const stored = await loadStoredResult(sb, routeCode)
+      if (stored) {
+        return NextResponse.json({ ...stored, liveError: live.message, ...(dryRun ? { dryRun: true } : {}) })
       }
     } catch (e) {
-      persistError = (e as Error).message
+      return fail('persist_failed', `Live pull failed (${live.message}) and the stored snapshot could not be read: ${(e as Error).message}`)
     }
   }
 
-  const diff = diffRows(rows, baselineRows)
+  // 3. Nothing to give ─────────────────────────────────────────────────────
+  if (!credsSet && !sb) return fail('not_configured', 'Neither NRSDB credentials nor Supabase are configured on the server.')
+  if (!credsSet) return fail('not_configured', 'NRSDB credentials are not set on the server and no ESR snapshot has been ingested yet (see /api/esr/ingest).')
+  const suffix = sb ? ' No stored snapshot is available to fall back on — push one via /api/esr/ingest.' : ' Supabase is not configured, so there is no stored snapshot to fall back on.'
+  return fail(live.reason, live.message + suffix, live.detail)
+}
 
-  // 3. Persist ─────────────────────────────────────────────────────────────
-  let persisted = false
-  if (sb && !persistError && !dryRun) {
-    try {
-      await persistSnapshot(sb, {
-        routeCode, snapshotDate, reportDate, capturedAt, rows,
-        baselineDate, diff, raw: payload,
-      })
-      persisted = true
-    } catch (e) {
-      persistError = (e as Error).message
-    }
+// ── GET ?probe=1 — deployment diagnostics ────────────────────────────────────
+
+export async function GET(req: NextRequest) {
+  const probe = new URL(req.url).searchParams.get('probe')
+  if (probe !== '1') {
+    return NextResponse.json({ ok: false, reason: 'error', message: 'Use POST to take a snapshot, or GET ?probe=1 for diagnostics.' }, { status: 405 })
   }
+  const email     = env('NRSDB_EMAIL')
+  const password  = env('NRSDB_PASSWORD')
+  const routeCode = (env('NRSDB_ROUTECODE') || 'EM').toUpperCase()
+  const sb        = getServerSupabase()
 
-  // 4. Shape for the PDF ──────────────────────────────────────────────────
-  const statusBy = new Map<string, { status: EsrStatus; changes?: EsrFieldChange[] }>()
-  for (const r of diff.new)       statusBy.set(r.baseRef, { status: 'NEW' })
-  for (const a of diff.amended)   statusBy.set(a.row.baseRef, { status: 'AMENDED', changes: a.changes })
-  for (const r of diff.unchanged) statusBy.set(r.baseRef, { status: 'UNCHANGED' })
-
-  const result: EsrSnapshotResult = {
-    ok: true,
+  const config = {
+    nrsdbEmailSet: !!email,
+    nrsdbPasswordSet: !!password,
     routeCode,
-    snapshotDate,
-    capturedAt,
-    baselineDate,
-    baselineCapturedAt,
-    persisted,
-    ...(dryRun ? { dryRun: true } : {}),
-    ...(persistError ? { persistError } : {}),
-    counts: {
-      active: rows.length,
-      new: diff.new.length,
-      amended: diff.amended.length,
-      removed: diff.removed.length,
-      unchanged: diff.unchanged.length,
-    },
-    active: rows.map(row => ({ row, ...(statusBy.get(row.baseRef) ?? { status: 'UNCHANGED' as EsrStatus }) })),
-    removed: diff.removed,
+    supabaseUrlSet: !!(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
+    supabaseServiceRoleKeySet: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    supabaseAnonKeyFallback: !process.env.SUPABASE_SERVICE_ROLE_KEY && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    ingestTokenSet: !!env('ESR_INGEST_TOKEN'),
   }
 
-  if (persisted) cache = { at: Date.now(), key: cacheKey, result }
-  return NextResponse.json(result)
+  let stored: unknown = null
+  let storedError: string | undefined
+  if (sb) {
+    try {
+      const run = await fetchLatestRun(sb, routeCode)
+      stored = run ? { snapshotDate: run.snapshotDate, capturedAt: run.capturedAt, esrCount: run.esrCount, baselineDate: run.baselineDate } : null
+    } catch (e) { storedError = (e as Error).message }
+  }
+
+  let liveLogin: Omit<LoginOutcome, 'bodySnippet'> & { bodySnippet?: string } | { skipped: string } = { skipped: 'NRSDB credentials not set' }
+  if (email && password) {
+    try {
+      liveLogin = await new NrsdbClient({ email, password }).loginDetailed()
+    } catch (e) {
+      liveLogin = { skipped: `request failed: ${(e as Error).message}` }
+    }
+  }
+
+  return NextResponse.json({
+    config,
+    stored,
+    ...(storedError ? { storedError } : {}),
+    liveLogin,
+    verdict: !email || !password
+      ? 'No NRSDB credentials on the server; the log will use the stored snapshot pushed via /api/esr/ingest.'
+      : 'ok' in liveLogin && liveLogin.ok
+        ? 'Live NRSDB login works from this server.'
+        : 'blocked' in liveLogin && liveLogin.blocked
+          ? 'NRSDB blocks this server\'s IP at the edge (bot protection). Credentials are not the problem. Use scripts/nrsdb_push.py from an allowed machine to feed /api/esr/ingest; the log falls back to that stored snapshot automatically.'
+          : 'Live login failed — see liveLogin for the HTTP status and landing URL.',
+  })
 }

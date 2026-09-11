@@ -68,6 +68,11 @@ export interface EsrSnapshotResult {
   persisted: boolean         // false when Supabase was not configured or dryRun
   dryRun?: boolean           // true when the caller asked for no writes (Test Mode)
   persistError?: string      // set when the snapshot could not be stored
+  // 'live'   — pulled from NRSDB by this request
+  // 'stored' — the live pull failed (or no server credentials); this is the
+  //            latest snapshot in Supabase, fed by the ingest endpoint
+  source: 'live' | 'stored'
+  liveError?: string         // why the live pull failed, when source is 'stored'
   counts: {
     active: number
     new: number
@@ -87,8 +92,9 @@ export interface EsrSnapshotFailure {
   //                    the section silently.
   // Anything else   — configured but the scrape/persist failed; the log prints
   //                    the message in place of the table so the gap is visible.
-  reason: 'not_configured' | 'auth_failed' | 'fetch_failed' | 'bad_payload' | 'persist_failed' | 'error'
+  reason: 'not_configured' | 'auth_failed' | 'blocked' | 'fetch_failed' | 'bad_payload' | 'persist_failed' | 'error'
   message: string
+  detail?: string            // diagnostic detail (HTTP status, final URL …) — no secrets
 }
 
 export type EsrSnapshotResponse = EsrSnapshotResult | EsrSnapshotFailure

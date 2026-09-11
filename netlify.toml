@@ -23,3 +23,4 @@
 #   NRSDB_EMAIL, NRSDB_PASSWORD           ESR scrape from NRSDB at log build
 #   NRSDB_ROUTECODE, NRSDB_FILTER         optional, default EM / imposed
 #   SUPABASE_SERVICE_ROLE_KEY             ESR snapshot writes (falls back to anon key)
+#   ESR_INGEST_TOKEN                      shared secret for /api/esr/ingest (scripts/nrsdb_push.py)

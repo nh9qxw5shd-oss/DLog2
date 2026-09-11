@@ -200,8 +200,38 @@ handler that runs server-side (Vercel function / Netlify function). It:
    (with a sub-row stating what changed) and a separate REMOVED table.
 
 Failure never blocks the log: if NRSDB is unreachable or the login fails, the
-PDF prints the reason in place of the table and the Generate step shows a
-warning. If the credentials are not set at all, the section is omitted.
+build falls back to the latest **stored** snapshot (see below) and the PDF says
+so, with the snapshot's age; if there is no stored snapshot either, the PDF
+prints the reason in place of the table and the Generate step shows a warning.
+If neither NRSDB credentials nor a stored snapshot exist, the section is omitted.
+
+### The live pull is blocked from hosted servers — use the push script
+
+`nrsdb.uk` sits behind its host's bot protection (StackProtect), which answers
+HTTP 403 with an empty body to requests from datacentre IP ranges **before the
+credentials are looked at**. Vercel and Netlify functions egress from exactly
+those ranges, so a live pull from the deployed app fails with "blocked", however
+correct `NRSDB_EMAIL` / `NRSDB_PASSWORD` are. Your own PC is not blocked.
+
+So the supported setup is:
+
+1. Set `ESR_INGEST_TOKEN` (any long random string) on the host and redeploy.
+2. On a PC that can open nrsdb.uk in a browser, run `scripts/nrsdb_push.py`
+   with `NRSDB_EMAIL`, `NRSDB_PASSWORD`, `DLOG2_URL` and the same
+   `ESR_INGEST_TOKEN` (env vars or a `.env` next to the script;
+   `pip install requests`). It logs in, pulls the route's imposed ESRs and
+   POSTs the raw payload to `/api/esr/ingest`, which runs the same flatten →
+   diff → store pipeline. Schedule it daily ahead of the morning log
+   (e.g. Task Scheduler / cron at 05:15); re-runs the same day just refresh
+   that day's snapshot.
+3. Generate the log as normal. The build still tries a live pull first; when
+   that is blocked it uses the stored snapshot and prints its capture time
+   (flagged STALE in red if older than 20 hours).
+
+`GET /api/esr/snapshot?probe=1` on the deployment shows which variables are
+set, what is stored, and the exact outcome of a live login attempt (HTTP
+status, landing URL, whether the edge blocked it) — use it to fault-find.
+`--dry-run` on the push script exercises the whole path without storing.
 
 Setup:
 
@@ -236,10 +266,13 @@ Patterns are tested in order; first match wins.
 ```
 emcc-daily-log/
 ├── app/
-│   ├── api/esr/snapshot/route.ts ← NRSDB ESR scrape + snapshot + diff (server)
+│   ├── api/esr/snapshot/route.ts ← ESR live pull → stored fallback, + ?probe=1 diagnostics (server)
+│   ├── api/esr/ingest/route.ts   ← token-protected ingest of raw NRSDB payload (server)
 │   ├── globals.css
 │   ├── layout.tsx
 │   └── page.tsx          ← Full app (upload → roster → review → generate)
+├── scripts/
+│   └── nrsdb_push.py      ← pull from NRSDB on an allowed PC → POST /api/esr/ingest
 ├── lib/
 │   ├── types.ts           ← Data types + category config
 │   ├── ccilParser.ts      ← CCIL DOCX regex parser
@@ -249,6 +282,7 @@ emcc-daily-log/
 │       ├── types.ts       ← shared ESR types
 │       ├── refnum.ts      ← "EM 061C.26" → base ref + revision rank
 │       ├── diff.ts        ← NRSDB JSON flattening + new/amended/removed diff
+│       ├── pipeline.ts    ← payload → flatten → diff → store; stored-snapshot read-back (server)
 │       ├── nrsdbClient.ts ← session-cookie login + getEsrsByRouteCode (server)
 │       └── snapshotStore.ts ← esr_snapshots / esr_snapshot_runs persistence (server)
 ├── vercel.json

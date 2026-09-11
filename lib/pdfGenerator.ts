@@ -571,17 +571,31 @@ export async function generatePDF(
 
     // Provenance line + legend
     sf('normal', 7); stc(C.darkGray)
-    const asAt = `Imposed ESRs as at ${fmtSnapshotStamp(esr.capturedAt)} (NRSDB).`
+    const stored = esr.source === 'stored'
+    const asAt = stored
+      ? `Imposed ESRs from the stored NRSDB snapshot captured ${fmtSnapshotStamp(esr.capturedAt)}.`
+      : `Imposed ESRs as at ${fmtSnapshotStamp(esr.capturedAt)} (NRSDB).`
     const vs = esr.baselineDate
       ? `Changes are against the previous snapshot of ${fmtSnapshotStamp(esr.baselineCapturedAt) || formatDisplayDate(esr.baselineDate)}.`
       : 'No previous snapshot — first capture, so no change status is available. Highlighting starts from the next log.'
     tx(`${asAt}  ${vs}`, M, y)
     y += 4.5
+    if (stored) {
+      const ageH = (Date.now() - new Date(esr.capturedAt).getTime()) / 36e5
+      const stale = Number.isFinite(ageH) && ageH > 20
+      sf(stale ? 'bold' : 'italic', 6.5); stc(stale ? C.red : [140, 80, 10])
+      const age = Number.isFinite(ageH) ? (ageH < 1 ? `${Math.round(ageH * 60)} min` : `${Math.round(ageH)} h`) : '?'
+      const note = (stale ? `STALE — snapshot is ${age} old. ` : `Snapshot is ${age} old. `) +
+        `Live pull from the server was not possible${esr.liveError ? ` (${esr.liveError})` : ''}.`
+      const noteLines = doc.splitTextToSize(note, W - M * 2).slice(0, 2)
+      tx(noteLines, M, y)
+      y += 3.6 * noteLines.length + 1
+    }
     if (esr.dryRun) {
       sf('italic', 6.5); stc([140, 80, 10])
       tx('Test Mode — snapshot not stored; the stored baseline is unchanged.', M, y)
       y += 4.5
-    } else if (!esr.persisted) {
+    } else if (!esr.persisted && !stored) {
       sf('italic', 6.5); stc(C.red)
       tx(`Snapshot not stored${esr.persistError ? `: ${esr.persistError.slice(0, 140)}` : ' (Supabase not configured)'} — the next log cannot compare against today.`, M, y)
       y += 4.5

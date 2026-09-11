@@ -31,6 +31,17 @@ export class NrsdbPayloadError extends Error {
   constructor(message: string) { super(message); this.name = 'NrsdbPayloadError' }
 }
 
+export interface LoginOutcome {
+  ok: boolean
+  blocked: boolean          // refused at the edge (bot protection), not a credential failure
+  status: number
+  finalUrl: string
+  cookies: number
+  stackProtect: boolean     // x-stackprotect-id header seen
+  message: string
+  bodySnippet: string       // first bit of the response text, tags stripped, for diagnostics
+}
+
 // ── Cookie jar ───────────────────────────────────────────────────────────────
 
 function readSetCookies(headers: Headers): string[] {
@@ -127,6 +138,15 @@ export class NrsdbClient {
   // Returns true when the login succeeded (we were redirected away from
   // login.php with a session cookie).
   async login(): Promise<boolean> {
+    return (await this.loginDetailed()).ok
+  }
+
+  // Same, but says WHY it failed. nrsdb.uk sits behind 20i's StackProtect
+  // bot protection, which answers 403 with an empty body to requests from
+  // datacentre IP ranges (Vercel/Netlify functions included) before the
+  // credentials are ever looked at — that case must not be reported as a
+  // password problem.
+  async loginDetailed(): Promise<LoginOutcome> {
     const form = new URLSearchParams({ email: this.email, password: this.password })
     const { resp, finalUrl } = await this.request(LOGIN_URL, {
       method: 'POST',
@@ -138,9 +158,27 @@ export class NrsdbClient {
       },
       followRedirects: true,
     })
-    // Drain the body so the connection is reusable.
-    await resp.text().catch(() => '')
-    return resp.ok && !finalUrl.includes('login.php') && this.jar.size > 0
+    const body = await resp.text().catch(() => '')
+    const cookies = this.jar.size
+    const stackProtect = !!resp.headers.get('x-stackprotect-id')
+    const blocked = resp.status === 403 || (resp.status === 401 && stackProtect && !finalUrl.includes('login.php'))
+    const ok = resp.ok && !finalUrl.includes('login.php') && cookies > 0
+
+    let message: string
+    if (ok) message = 'Login OK'
+    else if (blocked) message =
+      `NRSDB's host bot-protection${stackProtect ? ' (StackProtect)' : ''} refused the login request from this server's IP ` +
+      `(HTTP ${resp.status}). Credentials were never evaluated — datacentre egress is blocked; push the data via the ingest endpoint instead.`
+    else if (!resp.ok) message = `NRSDB login returned HTTP ${resp.status}.`
+    else if (finalUrl.includes('login.php')) message =
+      'NRSDB rejected the credentials (landed back on login.php). Check NRSDB_EMAIL / NRSDB_PASSWORD.'
+    else message = 'NRSDB login completed without setting a session cookie.'
+
+    return {
+      ok, blocked, status: resp.status, finalUrl, cookies, stackProtect,
+      message,
+      bodySnippet: body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160),
+    }
   }
 
   async getEsrs(routeCode = 'EM', filter = 'imposed'): Promise<unknown> {
@@ -167,6 +205,7 @@ export class NrsdbClient {
       if (expired) throw new NrsdbAuthError('NRSDB session not accepted after re-login.')
     }
 
+    if (resp.status === 403) throw new NrsdbFetchError(`NRSDB's host bot-protection refused getEsrsByRouteCode from this server's IP (HTTP 403).`)
     if (!resp.ok) throw new NrsdbFetchError(`NRSDB returned HTTP ${resp.status} for getEsrsByRouteCode.`)
     const text = await resp.text()
     try {
