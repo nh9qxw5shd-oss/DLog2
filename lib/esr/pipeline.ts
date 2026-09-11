@@ -8,6 +8,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { extractEsrList, flattenPull, diffRows } from './diff'
+import { detectNotAuthenticated } from './paste'
 import { fetchPriorBaseline, fetchSnapshotRows, fetchLatestRun, persistSnapshot } from './snapshotStore'
 import type { EsrRow, EsrDiff, EsrSnapshotResult, EsrSnapshotFailure, EsrStatus, EsrFieldChange } from './types'
 
@@ -36,6 +37,8 @@ export interface BuildArgs {
 // Flatten, diff against the prior stored baseline, persist (unless dryRun or
 // no Supabase) and return the PDF-ready result.
 export async function buildFromPayload(a: BuildArgs): Promise<EsrSnapshotResult | EsrSnapshotFailure> {
+  const notAuth = detectNotAuthenticated(a.payload)
+  if (notAuth) return { ok: false, reason: 'bad_payload', message: notAuth }
   const list = extractEsrList(a.payload)
   if (!list) return { ok: false, reason: 'bad_payload', message: 'NRSDB payload did not contain an ESR list.' }
   const rows = flattenPull(list)

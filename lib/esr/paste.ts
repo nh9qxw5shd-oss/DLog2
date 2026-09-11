@@ -11,7 +11,7 @@ export const NRSDB_FEED_URL = (routeCode = 'EM', filter = 'imposed') =>
   `https://nrsdb.uk/ajax/get.php?r=getEsrsByRouteCode&routecode=${encodeURIComponent(routeCode)}&filter=${encodeURIComponent(filter)}`
 
 export type PasteProblem =
-  | 'empty' | 'login_page' | 'html' | 'tree_view' | 'not_json' | 'not_list' | 'no_esrs' | 'not_esrs' | 'wrong_route' | 'truncated'
+  | 'empty' | 'login_page' | 'html' | 'tree_view' | 'not_json' | 'not_list' | 'no_esrs' | 'not_esrs' | 'wrong_route' | 'truncated' | 'not_authenticated'
 
 export type PasteParse =
   | { ok: true; payload: unknown[]; count: number; routeCodes: string[] }
@@ -25,6 +25,20 @@ function looksLikeHtml(s: string): boolean {
 
 function tryJson(s: string): unknown | undefined {
   try { return JSON.parse(s) } catch { return undefined }
+}
+
+// NRSDB answers an unauthenticated data request with JSON, not a login page:
+//   {"count":0,"data":{"code":401,"exception":"Not authenticated", …}}
+// Recognise it so an automated client (iOS Shortcuts) gets a precise message.
+export function detectNotAuthenticated(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const d = (parsed as Record<string, unknown>).data
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null
+  const o = d as Record<string, unknown>
+  if (o.code === 401 || /not authenticated/i.test(String(o.exception ?? ''))) {
+    return 'NRSDB answered "Not authenticated" (401): the request reached NRSDB but carried no valid session. If this came from a script or shortcut, the login step did not produce a session that the data request then sent.'
+  }
+  return null
 }
 
 export function parsePastedFeed(text: string, expectedRoute?: string): PasteParse {
@@ -65,6 +79,9 @@ export function parsePastedFeed(text: string, expectedRoute?: string): PastePars
     }
     return bad('not_json', 'Could not read that as NRSDB data. Click "Open NRSDB feed", press Ctrl+A then Ctrl+C in the tab that opens, come back and click Paste.')
   }
+
+  const auth = detectNotAuthenticated(parsed)
+  if (auth) return bad('not_authenticated', auth)
 
   const list = extractEsrList(parsed)
   if (!list) return bad('not_list', 'That is valid data but not an ESR list. Make sure the tab address ends with r=getEsrsByRouteCode… and copy the whole page.')
