@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'crypto'
 import { buildFromPayload } from '@/lib/esr/pipeline'
-import { parsePastedFeed } from '@/lib/esr/paste'
+import { parsePastedFeed, detectNotAuthenticated } from '@/lib/esr/paste'
 import { getServerSupabase } from '@/lib/esr/snapshotStore'
 
 export const runtime = 'nodejs'
@@ -73,6 +73,8 @@ export async function POST(req: NextRequest) {
     if (!parsed.ok) return NextResponse.json({ ok: false, reason: 'bad_payload', problem: parsed.problem, message: `NRSDB reply was not the ESR feed: ${parsed.message}` }, { status: 400 })
     payload = parsed.payload
   }
+  const notAuth = detectNotAuthenticated(payload)
+  if (notAuth) return NextResponse.json({ ok: false, reason: 'bad_payload', problem: 'not_authenticated', message: notAuth }, { status: 400 })
   if (payload && typeof payload === 'object' && !Array.isArray(payload) && !('data' in (payload as object))) {
     const keys = Object.keys(payload as object)
     if (keys.length && keys.every(k => k.length <= 8)) {
