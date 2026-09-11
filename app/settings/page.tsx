@@ -471,7 +471,7 @@ export default function SettingsPage() {
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-5">
 
-        <NrsdbSessionCard />
+        {process.env.NEXT_PUBLIC_ESR_SESSION_UI === '1' && <NrsdbSessionCard />}
 
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
