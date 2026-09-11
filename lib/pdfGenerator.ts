@@ -553,9 +553,11 @@ export async function generatePDF(
       if (esr.reason === 'not_configured') return
       newPage()
       sectionHead('EMERGENCY SPEED RESTRICTIONS', 'NRSDB')
-      sfc([253, 236, 236]); rc(M, y, W - M*2, 14)
-      sfc(C.red); rc(M, y, 3, 14)
-      sf('bold', 8); stc(C.red); tx('ESR DATA UNAVAILABLE FOR THIS LOG', M + 6, y + 5.5)
+      const skipped = esr.reason === 'skipped'
+      sfc(skipped ? [253, 244, 220] : [253, 236, 236]); rc(M, y, W - M*2, 14)
+      sfc(skipped ? C.amber : C.red); rc(M, y, 3, 14)
+      sf('bold', 8); stc(skipped ? [140, 80, 10] : C.red)
+      tx(skipped ? 'ESR DATA NOT PROVIDED AT BUILD' : 'ESR DATA UNAVAILABLE FOR THIS LOG', M + 6, y + 5.5)
       sf('normal', 7); stc(C.darkGray)
       tx(doc.splitTextToSize(esr.message, W - M*2 - 10).slice(0, 1), M + 6, y + 10.5)
       y += 20
@@ -574,6 +576,8 @@ export async function generatePDF(
     const stored = esr.source === 'stored'
     const asAt = stored
       ? `Imposed ESRs from the stored NRSDB snapshot captured ${fmtSnapshotStamp(esr.capturedAt)}.`
+      : esr.source === 'pasted'
+      ? `Imposed ESRs as at ${fmtSnapshotStamp(esr.capturedAt)} (NRSDB feed supplied by the operator at build).`
       : `Imposed ESRs as at ${fmtSnapshotStamp(esr.capturedAt)} (NRSDB).`
     const vs = esr.baselineDate
       ? `Changes are against the previous snapshot of ${fmtSnapshotStamp(esr.baselineCapturedAt) || formatDisplayDate(esr.baselineDate)}.`

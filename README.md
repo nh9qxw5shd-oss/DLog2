@@ -205,15 +205,37 @@ so, with the snapshot's age; if there is no stored snapshot either, the PDF
 prints the reason in place of the table and the Generate step shows a warning.
 If neither NRSDB credentials nor a stored snapshot exist, the section is omitted.
 
-### The live pull is blocked from hosted servers — use the push script
+### The live pull is blocked from hosted servers — the operator supplies the feed
 
 `nrsdb.uk` sits behind its host's bot protection (StackProtect), which answers
-HTTP 403 with an empty body to requests from datacentre IP ranges **before the
-credentials are looked at**. Vercel and Netlify functions egress from exactly
-those ranges, so a live pull from the deployed app fails with "blocked", however
-correct `NRSDB_EMAIL` / `NRSDB_PASSWORD` are. Your own PC is not blocked.
+HTTP 403 to requests from datacentre IP ranges before credentials are looked
+at. Vercel and Netlify functions egress from those ranges, so a live pull from
+the deployed app always fails with "blocked". The operator's own browser is not
+blocked, and is already logged in to NRSDB, so on production the Generate step
+asks the operator for the feed. Nothing to install:
 
-So the supported setup is:
+1. **Open NRSDB feed** — a button opens the NRSDB data address in a new tab.
+   It shows the raw ESR list because you are logged in.
+2. In that tab: **Ctrl+A, Ctrl+C**.
+3. Back in DLog2: **Paste ESR data**. The card reads the clipboard, validates
+   it, sends it to the server, which diffs it against the previous snapshot,
+   stores today's snapshot (not in Test Mode) and reports the counts.
+
+The validator recognises the common mistakes and says what to do: the NRSDB
+login page (you are not logged in), a browser "tree view" copy (switch to
+Raw Data / untick Pretty-print), the wrong route, an empty feed, or a partial
+copy. If the browser refuses clipboard access there is a paste box instead.
+
+The Generate button stays locked until the ESR data is fresh (pasted, pulled
+live, or a stored snapshot taken earlier today) or the operator explicitly
+clicks **Build without ESR data**, in which case the PDF states that no ESR
+data was supplied. A snapshot pasted by one operator serves every later build
+that day, on every deployment, since it lives in Supabase.
+
+### Alternative: an unattended push from a machine NRSDB allows
+
+If a machine outside the datacentre ranges is available (a home PC, a Pi, a
+Network Rail host), the paste step can be avoided entirely:
 
 1. Set `ESR_INGEST_TOKEN` (any long random string) on the host and redeploy.
 2. On a PC that can open nrsdb.uk in a browser, run `scripts/nrsdb_push.py`
@@ -282,6 +304,7 @@ emcc-daily-log/
 │       ├── types.ts       ← shared ESR types
 │       ├── refnum.ts      ← "EM 061C.26" → base ref + revision rank
 │       ├── diff.ts        ← NRSDB JSON flattening + new/amended/removed diff
+│       ├── paste.ts       ← validates an operator-pasted NRSDB feed, with plain-English guidance
 │       ├── pipeline.ts    ← payload → flatten → diff → store; stored-snapshot read-back (server)
 │       ├── nrsdbClient.ts ← session-cookie login + getEsrsByRouteCode (server)
 │       └── snapshotStore.ts ← esr_snapshots / esr_snapshot_runs persistence (server)

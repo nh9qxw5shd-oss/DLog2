@@ -7,9 +7,14 @@
 // and Netlify functions — it falls back to the latest snapshot stored by
 // /api/esr/ingest and says so in the result (source: 'stored', liveError).
 //
-// Body: { "reportDate": "YYYY-MM-DD", "dryRun": false }
+// Body: { "reportDate": "YYYY-MM-DD", "dryRun": false, "payload": [...]? }
 //   reportDate — the DLog2 log date, recorded on the run row
 //   dryRun     — Test Mode: scrape + baseline diff as normal, but write nothing
+//   payload    — the raw NRSDB feed pasted by the operator in the browser
+//                (the production path: NRSDB blocks hosted servers, the
+//                operator's own logged-in browser is not blocked). When
+//                present, no live pull is attempted; the payload is diffed
+//                and stored exactly as a live pull would be.
 //
 // GET ?probe=1 — diagnostics for fault-finding a deployment: which env vars
 // are present (booleans only), what is stored, and the outcome of a live
@@ -78,12 +83,21 @@ export async function POST(req: NextRequest) {
 
   let reportDate: string | null = null
   let dryRun = false
+  let pasted: unknown = undefined
   try {
     const body = await req.json().catch(() => ({}))
     const rd = typeof body?.reportDate === 'string' ? body.reportDate : ''
     if (/^\d{4}-\d{2}-\d{2}$/.test(rd)) reportDate = rd
     dryRun = body?.dryRun === true
+    if (body && typeof body === 'object' && body.payload !== undefined) pasted = body.payload
   } catch { /* body optional */ }
+
+  // 0. Operator-supplied feed ─────────────────────────────────────────────
+  if (pasted !== undefined) {
+    const result = await buildFromPayload({ payload: pasted, routeCode, reportDate, dryRun, sb, source: 'pasted' })
+    if (result.ok && result.persisted) cache = { at: Date.now(), key: `${routeCode}|${filter}`, result }
+    return NextResponse.json(result, { status: result.ok ? 200 : 400 })
+  }
 
   const cacheKey = `${routeCode}|${filter}`
   if (cache && cache.key === cacheKey && Date.now() - cache.at < CACHE_TTL_MS) {

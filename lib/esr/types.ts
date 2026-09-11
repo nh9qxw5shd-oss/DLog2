@@ -71,7 +71,9 @@ export interface EsrSnapshotResult {
   // 'live'   — pulled from NRSDB by this request
   // 'stored' — the live pull failed (or no server credentials); this is the
   //            latest snapshot in Supabase, fed by the ingest endpoint
-  source: 'live' | 'stored'
+  // 'pasted' — the operator pasted the NRSDB feed at build (production path,
+  //            since NRSDB blocks hosted servers)
+  source: 'live' | 'stored' | 'pasted'
   liveError?: string         // why the live pull failed, when source is 'stored'
   counts: {
     active: number
@@ -92,7 +94,8 @@ export interface EsrSnapshotFailure {
   //                    the section silently.
   // Anything else   — configured but the scrape/persist failed; the log prints
   //                    the message in place of the table so the gap is visible.
-  reason: 'not_configured' | 'auth_failed' | 'blocked' | 'fetch_failed' | 'bad_payload' | 'persist_failed' | 'error'
+  // 'skipped' — the operator chose to build without ESR data
+  reason: 'not_configured' | 'auth_failed' | 'blocked' | 'fetch_failed' | 'bad_payload' | 'persist_failed' | 'skipped' | 'error'
   message: string
   detail?: string            // diagnostic detail (HTTP status, final URL …) — no secrets
 }

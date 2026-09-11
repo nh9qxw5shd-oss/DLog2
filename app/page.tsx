@@ -4,7 +4,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
-  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin, FlaskConical
+  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin, FlaskConical,
+  ExternalLink, ClipboardPaste, Ban,
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
@@ -24,7 +25,7 @@ import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWi
 import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
-import { fetchEsrSnapshot, EsrSnapshotResponse } from '@/lib/esrClient'
+import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRSDB_FEED_URL, londonToday } from '@/lib/esrClient'
 import { useTestMode } from '@/lib/testMode'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
@@ -1406,6 +1407,170 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
   )
 }
 
+// ─── ESR data card (Generate step) ────────────────────────────────────────────
+// nrsdb.uk blocks logins from hosted servers, so on production the operator
+// supplies the feed from their own logged-in browser: open the feed address
+// in a tab, Ctrl+A, Ctrl+C, click Paste here. The card validates the paste
+// and says exactly what went wrong if it is the login page, a tree view, the
+// wrong route, or cut off. Generate stays locked until the data is fresh or
+// the operator explicitly chooses to build without it.
+
+function EsrCard({ esr, loading, fresh, skipped, testMode, onSkip, onUnskip, onPasted }: {
+  esr: EsrSnapshotResponse | null
+  loading: boolean
+  fresh: boolean
+  skipped: boolean
+  testMode: boolean
+  onSkip: () => void
+  onUnskip: () => void
+  onPasted: (payload: unknown) => Promise<EsrSnapshotResponse>
+}) {
+  const [problem, setProblem]   = useState<string>('')
+  const [manual, setManual]     = useState(false)
+  const [manualText, setManualText] = useState('')
+  const [busy, setBusy]         = useState(false)
+  const routeCode = (esr && esr.ok ? esr.routeCode : '') || 'EM'
+  const feedUrl = NRSDB_FEED_URL(routeCode)
+
+  const submit = async (text: string) => {
+    setProblem('')
+    const parsed = parsePastedFeed(text, routeCode)
+    if (!parsed.ok) { setProblem(parsed.message); return }
+    setBusy(true)
+    try {
+      const r = await onPasted(parsed.payload)
+      if (!r.ok) setProblem(r.message)
+      else { setManual(false); setManualText('') }
+    } finally { setBusy(false) }
+  }
+
+  const pasteFromClipboard = async () => {
+    setProblem('')
+    try {
+      const text = await navigator.clipboard.readText()
+      await submit(text)
+    } catch {
+      // Clipboard read refused (permission / browser policy): fall back to a
+      // box the operator can Ctrl+V into.
+      setManual(true)
+      setProblem('This browser would not hand over the clipboard. Click in the box below and press Ctrl+V instead.')
+    }
+  }
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+  }
+
+  // ── Resolved states ──────────────────────────────────────────────────────
+  const tone = fresh ? 'green' : skipped ? 'amber' : 'amber'
+  const border = tone === 'green' ? 'border-[rgba(39,174,96,0.5)] bg-[rgba(39,174,96,0.06)]' : 'border-[rgba(243,156,18,0.5)] bg-[rgba(243,156,18,0.08)]'
+
+  let headline: string
+  let sub: string | null = null
+  if (loading) { headline = 'Checking for ESR data…'; }
+  else if (fresh && esr?.ok) {
+    headline = `ESR data ready — ${esr.counts.active} imposed · ${esr.counts.new} new · ${esr.counts.amended} amended · ${esr.counts.removed} removed`
+    sub = (esr.source === 'pasted' ? 'From the NRSDB feed you pasted' : esr.source === 'stored' ? 'From a snapshot taken earlier today' : 'Pulled live from NRSDB')
+      + ` at ${fmt(esr.capturedAt)}`
+      + (esr.baselineDate ? `, compared with ${esr.baselineDate}` : ', first snapshot so no comparison yet')
+      + (esr.dryRun ? ' · Test Mode, not stored' : esr.persisted ? '' : ' · NOT STORED')
+  } else if (skipped) {
+    headline = 'Building without ESR data'
+    sub = 'The PDF will state that no ESR data was supplied for this log.'
+  } else if (esr?.ok && esr.source === 'stored') {
+    headline = `Latest stored ESR snapshot is from ${esr.snapshotDate} — a fresh feed is needed for today`
+    sub = 'Follow the three steps below. It takes about fifteen seconds.'
+  } else {
+    headline = 'ESR data needed — the server cannot reach NRSDB from here'
+    sub = 'Follow the three steps below. It takes about fifteen seconds.'
+  }
+
+  return (
+    <div className={cn('rounded border p-4 space-y-3', border)}>
+      <div className="flex items-start gap-3">
+        {loading ? <Loader2 size={16} className="animate-spin text-[#7A8BA8] mt-0.5 shrink-0" />
+          : fresh ? <Check size={16} className="text-green-400 mt-0.5 shrink-0" />
+          : <AlertTriangle size={16} className="text-amber-400 mt-0.5 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <p className={cn('text-sm font-semibold', fresh ? 'text-green-300' : 'text-amber-300')}>{headline}</p>
+          {sub && <p className="text-xs text-[#7A8BA8] mt-0.5">{sub}</p>}
+        </div>
+      </div>
+
+      {!loading && !fresh && !skipped && (
+        <ol className="space-y-2 text-xs text-[#C9D3E3]">
+          <li className="flex items-center gap-3">
+            <span className="w-5 h-5 rounded-full bg-[#E05206] text-white text-[10px] font-bold flex items-center justify-center shrink-0">1</span>
+            <a href={feedUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#003366] text-white font-semibold hover:bg-[#00427f] transition-colors">
+              <ExternalLink size={12} /> Open NRSDB feed
+            </a>
+            <span className="text-[#7A8BA8]">opens in a new tab — you must be logged in to NRSDB in this browser</span>
+          </li>
+          <li className="flex items-center gap-3">
+            <span className="w-5 h-5 rounded-full bg-[#E05206] text-white text-[10px] font-bold flex items-center justify-center shrink-0">2</span>
+            <span>In that tab press <kbd className="px-1 py-0.5 rounded bg-[#1A2740] font-mono">Ctrl</kbd>+<kbd className="px-1 py-0.5 rounded bg-[#1A2740] font-mono">A</kbd> then <kbd className="px-1 py-0.5 rounded bg-[#1A2740] font-mono">Ctrl</kbd>+<kbd className="px-1 py-0.5 rounded bg-[#1A2740] font-mono">C</kbd>, then come back here</span>
+          </li>
+          <li className="flex items-center gap-3">
+            <span className="w-5 h-5 rounded-full bg-[#E05206] text-white text-[10px] font-bold flex items-center justify-center shrink-0">3</span>
+            <button onClick={pasteFromClipboard} disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#E05206] text-white font-semibold hover:bg-[#c44804] disabled:opacity-50 transition-colors">
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <ClipboardPaste size={12} />} Paste ESR data
+            </button>
+            <button onClick={() => { setManual(m => !m); setProblem('') }} className="text-[#7A8BA8] hover:text-white underline underline-offset-2">
+              {manual ? 'hide paste box' : 'paste box instead'}
+            </button>
+          </li>
+        </ol>
+      )}
+
+      {!loading && !fresh && !skipped && manual && (
+        <div className="space-y-2">
+          <textarea
+            value={manualText}
+            onChange={e => setManualText(e.target.value)}
+            onPaste={e => { const t = e.clipboardData.getData('text'); if (t) { e.preventDefault(); setManualText(t); submit(t) } }}
+            placeholder='Click here and press Ctrl+V. The data starts with [{"id":'
+            className="w-full h-24 text-xs font-mono p-2 rounded bg-[#0F1729] border border-[rgba(74,111,165,0.4)] text-white"
+          />
+          <button onClick={() => submit(manualText)} disabled={busy || !manualText.trim()}
+            className="px-3 py-1.5 rounded bg-[#E05206] text-white text-xs font-semibold disabled:opacity-50">Use this data</button>
+        </div>
+      )}
+
+      {problem && (
+        <div className="flex items-start gap-2 p-3 rounded bg-[rgba(192,57,43,0.12)] border border-[rgba(192,57,43,0.4)] text-xs text-red-300">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" />
+          <span>{problem}</span>
+        </div>
+      )}
+
+      {!loading && !fresh && (
+        <div className="pt-2 border-t border-[rgba(74,111,165,0.2)] flex items-center justify-between gap-3 text-xs">
+          {skipped
+            ? <button onClick={onUnskip} className="text-[#7A8BA8] hover:text-white underline underline-offset-2">Actually, I will supply the ESR feed</button>
+            : <>
+                <span className="text-[#4A5A72]">NRSDB unavailable? You can still build the log, and the PDF will say ESR data was not supplied.</span>
+                <button onClick={onSkip} className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[rgba(243,156,18,0.5)] text-amber-300 hover:bg-[rgba(243,156,18,0.15)] transition-colors">
+                  <Ban size={12} /> Build without ESR data
+                </button>
+              </>}
+        </div>
+      )}
+
+      {!loading && fresh && esr?.ok && esr.source !== 'live' && (
+        <div className="pt-2 border-t border-[rgba(74,111,165,0.2)] text-xs text-[#4A5A72] flex items-center gap-3">
+          <span>Need to refresh it?</span>
+          <a href={feedUrl} target="_blank" rel="noopener noreferrer" className="text-[#7A8BA8] hover:text-white underline underline-offset-2 inline-flex items-center gap-1"><ExternalLink size={11} /> Open NRSDB feed</a>
+          <button onClick={pasteFromClipboard} disabled={busy} className="text-[#7A8BA8] hover:text-white underline underline-offset-2 inline-flex items-center gap-1"><ClipboardPaste size={11} /> Paste again</button>
+          {testMode && <span className="text-amber-400">(Test Mode: nothing is stored)</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Step 4: Generate ─────────────────────────────────────────────────────────
 
 function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
@@ -1416,6 +1581,25 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
   const [statusMsg, setStatusMsg]   = useState('')
   const [dbReports, setDbReports]   = useState<number | null>(null)
   const [esr, setEsr]               = useState<EsrSnapshotResponse | null>(null)
+  const [esrLoading, setEsrLoading] = useState(true)
+  const [esrSkipped, setEsrSkipped] = useState(false)
+
+  // Ask the server for ESR data as soon as the step opens: a live pull where
+  // that works (local dev), otherwise today's stored snapshot if one exists.
+  // On production NRSDB blocks the server, so most mornings this comes back
+  // as "stored, from yesterday" or a failure and the operator pastes the feed.
+  useEffect(() => {
+    let cancelled = false
+    setEsrLoading(true)
+    fetchEsrSnapshot(log.date, { dryRun: testMode }).then(r => {
+      if (!cancelled) { setEsr(r); setEsrLoading(false) }
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [log.date, testMode])
+
+  const esrFresh = isEsrFresh(esr)
+  const esrReady = esrFresh || esrSkipped
 
   const handle = async (force = false) => {
     setGenerating(true); setError(''); setCanOverride(false); setStatusMsg('')
@@ -1451,12 +1635,12 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
         }
       }
 
-      // 3b. Scrape the route's imposed ESRs from NRSDB (server-side), store
-      // today's snapshot and diff against the previous one. A failure here
-      // never blocks the log — the PDF prints the reason in the ESR section.
-      setStatusMsg('Fetching ESRs from NRSDB…')
-      const esrResult = await fetchEsrSnapshot(pdfLog.date, { dryRun: testMode })
-      setEsr(esrResult)
+      // 3b. ESR data was resolved when the step opened (live pull, today's
+      // stored snapshot, or the feed the operator pasted). If the operator
+      // chose to build without it, the PDF says so explicitly.
+      const esrResult: EsrSnapshotResponse | null = esrFresh
+        ? esr
+        : { ok: false, reason: 'skipped', message: 'The operator built this log without ESR data (no fresh NRSDB feed was supplied).' }
 
       // 4. Build and download PDF (with charts + ESRs if available)
       setStatusMsg('Building PDF…')
@@ -1500,6 +1684,22 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
         <p className="text-sm text-[#7A8BA8]">Review summary then generate the OFFICIAL-SENSITIVE PDF.</p>
       </div>
 
+      <EsrCard
+        esr={esr}
+        loading={esrLoading}
+        fresh={esrFresh}
+        skipped={esrSkipped}
+        testMode={testMode}
+        onSkip={() => setEsrSkipped(true)}
+        onUnskip={() => setEsrSkipped(false)}
+        onPasted={async (payload) => {
+          setEsrLoading(true); setEsrSkipped(false)
+          const r = await fetchEsrSnapshot(log.date, { dryRun: testMode, payload })
+          setEsr(r); setEsrLoading(false)
+          return r
+        }}
+      />
+
       {testMode && (
         <div className="flex items-start gap-3 p-4 rounded bg-[rgba(243,156,18,0.12)] border border-[rgba(243,156,18,0.5)]">
           <FlaskConical size={16} className="text-amber-400 mt-0.5 shrink-0" />
@@ -1535,14 +1735,7 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (manual entry)</div>
-          {esr === null || (esr.ok === false && esr.reason === 'not_configured')
-            ? <div className={cn('flex items-center gap-2', esr !== null && 'text-[#4A5A72] opacity-50')}>
-                <span className="w-[11px] h-[11px] rounded-full border border-current inline-block" />
-                {esr === null
-                  ? 'Emergency Speed Restrictions (NRSDB snapshot taken at build)'
-                  : 'Emergency Speed Restrictions (NRSDB not configured on server)'}
-              </div>
-            : esr.ok
+          {esrFresh && esr?.ok
             ? <div className="flex items-center gap-2">
                 <Check size={11} className="text-[#27AE60]" />
                 Emergency Speed Restrictions
@@ -1550,19 +1743,10 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
                   ({esr.counts.active} imposed · {esr.counts.new} new · {esr.counts.amended} amended · {esr.counts.removed} removed
                   {esr.baselineDate ? ` vs ${esr.baselineDate}` : ' · first snapshot'})
                 </span>
-                {esr.source === 'stored'
-                  ? <span className="text-amber-400" title={esr.liveError}>— from stored snapshot, live pull unavailable</span>
-                  : esr.dryRun
-                  ? <span className="text-amber-400">— snapshot not stored (Test Mode)</span>
-                  : !esr.persisted && <span className="text-amber-400">— snapshot NOT stored</span>}
               </div>
-            : <div className="flex items-start gap-2 text-amber-400">
-                <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-                <span>
-                  Emergency Speed Restrictions unavailable — {esr.message}
-                  {esr.detail && <span className="block text-[#7A8BA8] font-mono">{esr.detail}</span>}
-                </span>
-              </div>
+            : esrSkipped
+            ? <div className="flex items-center gap-2 text-amber-400"><Ban size={11} /> Emergency Speed Restrictions — building WITHOUT ESR data (stated on the PDF)</div>
+            : <div className="flex items-center gap-2 text-amber-400"><AlertTriangle size={11} /> Emergency Speed Restrictions — needs the NRSDB feed (see above)</div>
           }
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
           {isSupabaseConfigured() && (
@@ -1611,10 +1795,11 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
       )}
 
       <div className="space-y-2">
-        <button onClick={() => handle()} disabled={generating}
+        <button onClick={() => handle()} disabled={generating || !esrReady}
+          title={!esrReady ? 'Supply the NRSDB ESR feed above, or choose to build without it.' : undefined}
           className={cn(
             'w-full py-3 text-white text-sm font-bold rounded flex items-center justify-center gap-3 transition-all',
-            generating ? 'bg-[#4A6FA5] cursor-not-allowed'
+            (generating || !esrReady) ? 'bg-[#4A6FA5] cursor-not-allowed'
               : testMode ? 'bg-[#B7791F] hover:bg-[#9A6519]'
               : 'bg-[#E05206] hover:bg-[#c44804]'
           )}>

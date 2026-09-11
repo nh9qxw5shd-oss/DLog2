@@ -30,6 +30,7 @@ export interface BuildArgs {
   reportDate: string | null
   dryRun: boolean
   sb: SupabaseClient | null
+  source?: 'live' | 'pasted'  // default 'live'
 }
 
 // Flatten, diff against the prior stored baseline, persist (unless dryRun or
@@ -83,7 +84,7 @@ export async function buildFromPayload(a: BuildArgs): Promise<EsrSnapshotResult 
 
   return {
     ok: true,
-    source: 'live',
+    source: a.source ?? 'live',
     routeCode: a.routeCode,
     snapshotDate,
     capturedAt,
