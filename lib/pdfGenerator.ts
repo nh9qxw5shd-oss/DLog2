@@ -7,6 +7,8 @@ import {
 } from './types'
 import type { ChartImages } from './chartRenderer'
 import type { CategorySettings } from './categorySettings'
+import type { EsrSnapshotResponse, EsrRow, EsrFieldChange } from './esr/types'
+import { describeChanges } from './esr/diff'
 
 export type { ChartImages }
 
@@ -108,7 +110,12 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function generatePDF(log: LogState, chartImages?: ChartImages, categorySettings?: CategorySettings): Promise<void> {
+export async function generatePDF(
+  log: LogState,
+  chartImages?: ChartImages,
+  categorySettings?: CategorySettings,
+  esr?: EsrSnapshotResponse | null,
+): Promise<void> {
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
@@ -466,6 +473,221 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
     }
   }
 
+  // ── Emergency Speed Restrictions (NRSDB snapshot) ─────────────────────────
+  // Every currently imposed ESR for the route, with rows highlighted NEW or
+  // AMENDED against the previous snapshot and a separate table of anything
+  // REMOVED since then. Data comes from /api/esr/snapshot at build time.
+
+  const ESR_NEW_BG:     RGB = [214, 240, 224]
+  const ESR_AMEND_BG:   RGB = [253, 236, 200]
+  const ESR_REMOVED_BG: RGB = [244, 226, 224]
+
+  const fmtEsrDate = (iso: string | null, raw: string | null): string => {
+    if (iso) {
+      const d = new Date(iso)
+      if (!Number.isNaN(d.getTime())) {
+        return d.toLocaleString('en-GB', {
+          timeZone: 'Europe/London', day: '2-digit', month: '2-digit', year: '2-digit',
+          hour: '2-digit', minute: '2-digit', hour12: false,
+        }).replace(',', '')
+      }
+    }
+    return raw ? (raw.length > 16 ? raw.slice(0, 16) : raw) : '—'
+  }
+  const fmtSnapshotStamp = (iso: string | null): string => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    return d.toLocaleString('en-GB', {
+      timeZone: 'Europe/London', day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).replace(',', '')
+  }
+  const esrSpeedCell = (r: EsrRow): string => {
+    const spd = r.speedValue ? `${r.speedValue}${r.speedUnit ? ` ${r.speedUnit}` : ''}` : '—'
+    return r.linespeed ? `${spd}\n(line ${r.linespeed})` : spd
+  }
+  const esrLocationCell = (r: EsrRow): string => {
+    const parts = [r.location, r.linesText ? `Lines: ${r.linesText}` : null].filter(Boolean) as string[]
+    return parts.join('\n') || '—'
+  }
+  const esrRefCell = (r: EsrRow): string => {
+    const extras = [r.ccilNumber ? `CCIL ${r.ccilNumber}` : null, r.fmsNumber ? `FMS ${r.fmsNumber}` : null]
+      .filter(Boolean) as string[]
+    return extras.length ? `${r.refnum}\n${extras.join(' · ')}` : r.refnum
+  }
+
+  const esrTableStyles = {
+    margin: { left: M, right: M, top: 22 },
+    theme: 'grid' as const,
+    headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 6.5, fontStyle: 'bold' as const, cellPadding: 1.8 },
+    bodyStyles: { fontSize: 6, textColor: C.darkGray, cellPadding: 1.5, lineColor: C.lightGray, lineWidth: 0.1, valign: 'top' as const },
+    alternateRowStyles: { fillColor: [247, 248, 251] as RGB },
+    didDrawPage: () => { drawCompactHeader() },
+  }
+
+  const drawEsrSection = () => {
+    if (!esr) return
+    if (!esr.ok) {
+      if (esr.reason === 'not_configured') return
+      newPage()
+      sectionHead('EMERGENCY SPEED RESTRICTIONS', 'NRSDB')
+      sfc([253, 236, 236]); rc(M, y, W - M*2, 14)
+      sfc(C.red); rc(M, y, 3, 14)
+      sf('bold', 8); stc(C.red); tx('ESR DATA UNAVAILABLE FOR THIS LOG', M + 6, y + 5.5)
+      sf('normal', 7); stc(C.darkGray)
+      tx(doc.splitTextToSize(esr.message, W - M*2 - 10).slice(0, 1), M + 6, y + 10.5)
+      y += 20
+      return
+    }
+
+    const c = esr.counts
+    newPage()
+    sectionHead(
+      `EMERGENCY SPEED RESTRICTIONS — ${esr.routeCode} ROUTE`,
+      `${c.active} imposed · ${c.new} new · ${c.amended} amended · ${c.removed} removed`,
+    )
+
+    // Provenance line + legend
+    sf('normal', 7); stc(C.darkGray)
+    const asAt = `Imposed ESRs as at ${fmtSnapshotStamp(esr.capturedAt)} (NRSDB).`
+    const vs = esr.baselineDate
+      ? `Changes are against the previous snapshot of ${fmtSnapshotStamp(esr.baselineCapturedAt) || formatDisplayDate(esr.baselineDate)}.`
+      : 'No previous snapshot — first capture, so no change status is available. Highlighting starts from the next log.'
+    tx(`${asAt}  ${vs}`, M, y)
+    y += 4.5
+    if (!esr.persisted) {
+      sf('italic', 6.5); stc(C.red)
+      tx(`Snapshot not stored${esr.persistError ? `: ${esr.persistError.slice(0, 140)}` : ' (Supabase not configured)'} — the next log cannot compare against today.`, M, y)
+      y += 4.5
+    }
+    const legend: Array<[string, RGB]> = [['NEW since last snapshot', ESR_NEW_BG], ['AMENDED since last snapshot', ESR_AMEND_BG]]
+    let lx = M
+    for (const [label, bg] of legend) {
+      sfc(bg); sdc(C.lightGray); doc.setLineWidth(0.2); rc(lx, y - 2.6, 5, 3.2, 'FD')
+      sf('normal', 6.5); stc(C.darkGray); tx(label, lx + 6.5, y)
+      lx += 6.5 + doc.getTextWidth(label) + 8
+    }
+    y += 4
+
+    // ── Active table ────────────────────────────────────────────────────────
+    type RowMeta = { kind: 'row'; status: 'NEW' | 'AMENDED' | 'UNCHANGED' } | { kind: 'changes' }
+    const body: any[][] = []
+    const meta: RowMeta[] = []
+    for (const entry of esr.active) {
+      const r = entry.row
+      body.push([
+        esrRefCell(r),
+        r.duName || '—',
+        r.elrCode || '—',
+        esrLocationCell(r),
+        esrSpeedCell(r),
+        r.reason || '—',
+        fmtEsrDate(r.whenImposed, r.whenImposedRaw),
+        fmtEsrDate(r.etr, r.etrRaw),
+        entry.status === 'UNCHANGED' ? '' : entry.status,
+      ])
+      meta.push({ kind: 'row', status: entry.status })
+      if (entry.status === 'AMENDED' && entry.changes?.length) {
+        body.push([{ content: `Amended: ${describeChanges(entry.changes as EsrFieldChange[])}`, colSpan: 9 }])
+        meta.push({ kind: 'changes' })
+      }
+    }
+
+    autoTable(doc, {
+      ...esrTableStyles,
+      startY: y,
+      head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'ESR speed', 'Reason', 'Imposed', 'ETR', 'Status']],
+      body,
+      columnStyles: {
+        0: { cellWidth: 22 },
+        1: { cellWidth: 17 },
+        2: { cellWidth: 11 },
+        3: { cellWidth: 'auto' },
+        4: { cellWidth: 17 },
+        5: { cellWidth: 34 },
+        6: { cellWidth: 17 },
+        7: { cellWidth: 17 },
+        8: { cellWidth: 14, halign: 'center' as const },
+      },
+      didParseCell: (data: any) => {
+        if (data.section !== 'body') return
+        const m = meta[data.row.index]
+        if (!m) return
+        if (m.kind === 'changes') {
+          data.cell.styles.fillColor = ESR_AMEND_BG
+          data.cell.styles.fontStyle = 'italic'
+          data.cell.styles.textColor = [140, 80, 10]
+          data.cell.styles.fontSize = 5.8
+          return
+        }
+        if (m.status === 'NEW') {
+          data.cell.styles.fillColor = ESR_NEW_BG
+          if (data.column.index === 8) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [20, 110, 60] }
+        } else if (m.status === 'AMENDED') {
+          data.cell.styles.fillColor = ESR_AMEND_BG
+          if (data.column.index === 8) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [140, 80, 10] }
+        }
+        if (data.column.index === 0) data.cell.styles.fontStyle = 'bold'
+      },
+    })
+    y = getAutoY() + 8
+
+    // ── Removed since baseline ──────────────────────────────────────────────
+    checkPage(24)
+    const removedTitle = esr.baselineDate
+      ? `REMOVED SINCE ${formatDisplayDate(esr.baselineDate).toUpperCase()}`
+      : 'REMOVED SINCE LAST SNAPSHOT'
+    sfc(C.lightGray); rc(M, y, W - M*2, 7)
+    sfc(C.red); rc(M, y, 3, 7)
+    sf('bold', 7.5); stc(C.navy); tx(removedTitle, M + 6, y + 4.9)
+    sf('normal', 6.5); stc(C.darkGray)
+    tx(`${esr.removed.length} restriction${esr.removed.length !== 1 ? 's' : ''}`, W - M - 2, y + 4.9, { align: 'right' })
+    y += 10
+
+    if (!esr.baselineDate) {
+      sf('italic', 7); stc(C.midGray)
+      tx('No previous snapshot to compare against.', M + 2, y)
+      y += 6
+    } else if (esr.removed.length === 0) {
+      sf('italic', 7); stc(C.midGray)
+      tx('None — every restriction in the previous snapshot is still imposed.', M + 2, y)
+      y += 6
+    } else {
+      autoTable(doc, {
+        ...esrTableStyles,
+        startY: y,
+        head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'Last speed', 'Reason', 'Imposed', 'Last ETR']],
+        body: esr.removed.map(r => [
+          esrRefCell(r),
+          r.duName || '—',
+          r.elrCode || '—',
+          esrLocationCell(r),
+          esrSpeedCell(r),
+          r.reason || '—',
+          fmtEsrDate(r.whenImposed, r.whenImposedRaw),
+          fmtEsrDate(r.etr, r.etrRaw),
+        ]),
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 17 },
+          2: { cellWidth: 11 },
+          3: { cellWidth: 'auto' },
+          4: { cellWidth: 17 },
+          5: { cellWidth: 34 },
+          6: { cellWidth: 17 },
+          7: { cellWidth: 17 },
+        },
+        didParseCell: (data: any) => {
+          if (data.section !== 'body') return
+          data.cell.styles.fillColor = ESR_REMOVED_BG
+          if (data.column.index === 0) data.cell.styles.fontStyle = 'bold'
+        },
+      })
+      y = getAutoY() + 8
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // BUILD DOCUMENT
   // ─────────────────────────────────────────────────────────────────────────
@@ -484,6 +706,9 @@ export async function generatePDF(log: LogState, chartImages?: ChartImages, cate
   newPage()
   sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
   drawFiveDayLookAhead()
+
+  // ── 1b. Emergency Speed Restrictions (own page, when NRSDB is configured) ─
+  drawEsrSection()
 
   // ── 2. Safety infographic (page 3+) ───────────────────────────────────────
   newPage()

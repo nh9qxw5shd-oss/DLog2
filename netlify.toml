@@ -17,3 +17,9 @@
 #   NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL    roster auto-import (sibling project)
 #   NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY
 #   NEXT_PUBLIC_ROSTERHUB_LINKS           roster groups, default "CTRL,SNDM"
+#
+# Server-only (NOT NEXT_PUBLIC_ — read at request time by the /api/esr/snapshot
+# route handler, which the Netlify Next.js runtime deploys as a function):
+#   NRSDB_EMAIL, NRSDB_PASSWORD           ESR scrape from NRSDB at log build
+#   NRSDB_ROUTECODE, NRSDB_FILTER         optional, default EM / imposed
+#   SUPABASE_SERVICE_ROLE_KEY             ESR snapshot writes (falls back to anon key)

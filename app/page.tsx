@@ -24,6 +24,7 @@ import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWi
 import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
+import { fetchEsrSnapshot, EsrSnapshotResponse } from '@/lib/esrClient'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -1413,6 +1414,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
   const [canOverride, setCanOverride] = useState(false)
   const [statusMsg, setStatusMsg]   = useState('')
   const [dbReports, setDbReports]   = useState<number | null>(null)
+  const [esr, setEsr]               = useState<EsrSnapshotResponse | null>(null)
 
   const handle = async (force = false) => {
     setGenerating(true); setError(''); setCanOverride(false); setStatusMsg('')
@@ -1443,9 +1445,16 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
         }
       }
 
-      // 4. Build and download PDF (with charts if available)
+      // 3b. Scrape the route's imposed ESRs from NRSDB (server-side), store
+      // today's snapshot and diff against the previous one. A failure here
+      // never blocks the log — the PDF prints the reason in the ESR section.
+      setStatusMsg('Fetching ESRs from NRSDB…')
+      const esrResult = await fetchEsrSnapshot(pdfLog.date)
+      setEsr(esrResult)
+
+      // 4. Build and download PDF (with charts + ESRs if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(pdfLog, chartImages, readCategorySettings())
+      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult)
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
@@ -1507,6 +1516,28 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (manual entry)</div>
+          {esr === null || (esr.ok === false && esr.reason === 'not_configured')
+            ? <div className={cn('flex items-center gap-2', esr !== null && 'text-[#4A5A72] opacity-50')}>
+                <span className="w-[11px] h-[11px] rounded-full border border-current inline-block" />
+                {esr === null
+                  ? 'Emergency Speed Restrictions (NRSDB snapshot taken at build)'
+                  : 'Emergency Speed Restrictions (NRSDB not configured on server)'}
+              </div>
+            : esr.ok
+            ? <div className="flex items-center gap-2">
+                <Check size={11} className="text-[#27AE60]" />
+                Emergency Speed Restrictions
+                <span className="text-[#7A8BA8]">
+                  ({esr.counts.active} imposed · {esr.counts.new} new · {esr.counts.amended} amended · {esr.counts.removed} removed
+                  {esr.baselineDate ? ` vs ${esr.baselineDate}` : ' · first snapshot'})
+                </span>
+                {!esr.persisted && <span className="text-amber-400">— snapshot NOT stored</span>}
+              </div>
+            : <div className="flex items-center gap-2 text-amber-400">
+                <AlertTriangle size={11} />
+                Emergency Speed Restrictions unavailable — {esr.message}
+              </div>
+          }
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
           {isSupabaseConfigured()
             ? <div className="flex items-center gap-2">
@@ -1543,6 +1574,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
           <p className="text-green-400 text-sm font-medium">
             PDF downloaded successfully.
             {dbReports !== null && ` Historical trends from ${dbReports} report${dbReports !== 1 ? 's' : ''} included.`}
+            {esr?.ok && ` ${esr.counts.active} ESR${esr.counts.active !== 1 ? 's' : ''} listed.`}
           </p>
         </div>
       )}

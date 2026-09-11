@@ -1,7 +1,7 @@
 # EMCC Daily Report Generator
 
 **Network Rail · East Midlands Control Centre**  
-Automated daily operations report: CCIL `.docx` export → structured PDF. No backend, no API keys, no data leaves the browser.
+Automated daily operations report: CCIL `.docx` export → structured PDF. Parsing and PDF generation run entirely in the browser; the only server code is a single route handler that pulls the route's Emergency Speed Restrictions from NRSDB at build time (optional).
 
 ---
 
@@ -11,9 +11,12 @@ Automated daily operations report: CCIL `.docx` export → structured PDF. No ba
 2. **Parse** — mammoth.js reads the DOCX; regex parser extracts and classifies every incident locally
 3. **Roster** — Enter daily shift staffing manually
 4. **Review** — Add, edit, remove, or re-flag incidents
-5. **Generate** — jsPDF builds the report in-browser → download PDF
+5. **Generate** — jsPDF builds the report in-browser → download PDF. When NRSDB
+   credentials are configured, this step also pulls the route's imposed ESRs
+   (see below) before the PDF is built.
 
-Everything runs client-side. No data is sent anywhere.
+CCIL data never leaves the browser. Incident data and ESR snapshots are written
+to Supabase only when those integrations are configured.
 
 ---
 
@@ -21,6 +24,8 @@ Everything runs client-side. No data is sent anywhere.
 
 - Cover page (NR branding, OFFICIAL-SENSITIVE classification)
 - Shift roster grid (day / night)
+- 5 Day Look Ahead
+- Emergency Speed Restrictions — every imposed ESR for the route, NEW and AMENDED rows highlighted, plus a table of restrictions REMOVED since the previous snapshot (optional, needs NRSDB credentials)
 - Headline performance metrics
 - Significant incidents summary
 - Categorised incident tables: SPADs, TPWS, Bridge Strikes, Near Misses, Irregular Working, Level Crossings, Fires, Crime, HABD/WILD, Passenger Injuries, Infrastructure, Traction
@@ -40,7 +45,7 @@ Everything runs client-side. No data is sent anywhere.
 | PDF generation | jsPDF + jspdf-autotable (browser) |
 | Styling | Tailwind CSS |
 
-**No server components. No API keys. No database.**
+**One route handler** (`app/api/esr/snapshot`) for the NRSDB ESR scrape — everything else is client-side. All integrations (Supabase, rosterhub, NRSDB) are optional.
 
 ---
 
@@ -90,6 +95,8 @@ runtime handles it with no extra work. A `netlify.toml` is included.
    | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL` | "Import roster" button |
    | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY` | (same) |
    | `NEXT_PUBLIC_ROSTERHUB_LINKS` | Roster groups (optional, default `CTRL,SNDM`) |
+   | `NRSDB_EMAIL` / `NRSDB_PASSWORD` | ESR section in the PDF (server-only, read at request time — not inlined) |
+   | `SUPABASE_SERVICE_ROLE_KEY` | ESR snapshot writes (server-only; falls back to the anon key) |
 
    With none set, the full upload → parse → roster → PDF flow still works.
 3. **Deploy** — Click Deploy.
@@ -114,8 +121,8 @@ No `.env` file needed.
 
 ## Security Notes
 
-- Fully client-side — CCIL data never leaves the user's browser
-- No server, no database, no third-party API calls
+- CCIL parsing and PDF generation are fully client-side — CCIL data never leaves the user's browser
+- The only server code is the ESR route handler; NRSDB credentials live in server-only env vars and are never sent to the browser
 - Add Vercel Password Protection (Pro plan) for access control
 - Mark your Vercel deployment as OFFICIAL-SENSITIVE and restrict access
 
@@ -145,6 +152,52 @@ into DLog2 slots; cells like `AL`, `OFF`, `SPARE` are skipped. A shift whose
 start hour is between 06:00 and 17:59 lands on the day shift, otherwise the
 night shift. Manual entry remains available — the import only pre-fills.
 
+## Emergency Speed Restrictions (NRSDB snapshot)
+
+At the Generate step DLog2 calls `POST /api/esr/snapshot`, a Next.js route
+handler that runs server-side (Vercel function / Netlify function). It:
+
+1. Logs in to `nrsdb.uk` with the configured account (session-cookie auth —
+   the same thing the site's export button does, automated) and calls
+   `getEsrsByRouteCode` for `NRSDB_ROUTECODE` (default `EM`) with
+   `filter=imposed`. Re-authenticates once if the session has expired.
+2. Flattens each ESR and parses its reference into a stable `base_ref`
+   (`EM 061C.26` → `EM 061.26`, revision `C`). Amendments keep the base number
+   and step the letter, so the base ref is what is tracked day to day.
+3. Upserts today's list into `esr_snapshots` keyed on
+   `(snapshot_date, route_code, base_ref)` — Europe/London calendar date —
+   and writes a summary row plus the full diff JSON to `esr_snapshot_runs`.
+   Re-running the build the same day overwrites that day's snapshot.
+4. Diffs against the most recent **prior** snapshot date:
+   - **NEW** — base ref not in the prior snapshot
+   - **AMENDED** — present in both, but the revision letter advanced or the
+     speed, line speed, location, reason or ETR changed
+   - **REMOVED** — in the prior snapshot, not imposed today
+5. Returns the classified list; the PDF renders it on its own page after the
+   5 Day Look Ahead, with NEW rows tinted green, AMENDED rows tinted amber
+   (with a sub-row stating what changed) and a separate REMOVED table.
+
+Failure never blocks the log: if NRSDB is unreachable or the login fails, the
+PDF prints the reason in place of the table and the Generate step shows a
+warning. If the credentials are not set at all, the section is omitted.
+
+Setup:
+
+```
+NRSDB_EMAIL               = you@networkrail.co.uk      # server-only
+NRSDB_PASSWORD            = ...                        # server-only
+NRSDB_ROUTECODE           = EM                         # optional
+SUPABASE_SERVICE_ROLE_KEY = ...                        # server-only, preferred for snapshot writes
+```
+
+Run `supabase/migrations/009_esr_snapshots.sql` in the Supabase SQL editor.
+It also creates an `esr_current` view (the latest snapshot per route) for use
+by Insight, the messaging assistant, or ad-hoc queries; `esr_snapshot_runs.diff`
+holds the ready-made `{new, amended, removed}` breakdown per day.
+
+The route caches a successful scrape in-process for 60 seconds so repeated
+"Regenerate PDF" clicks do not re-hit the NRSDB login endpoint.
+
 ## Modifying the PDF
 
 Edit `lib/pdfGenerator.ts` — sections are clearly commented.
@@ -161,13 +214,21 @@ Patterns are tested in order; first match wins.
 ```
 emcc-daily-log/
 ├── app/
+│   ├── api/esr/snapshot/route.ts ← NRSDB ESR scrape + snapshot + diff (server)
 │   ├── globals.css
 │   ├── layout.tsx
 │   └── page.tsx          ← Full app (upload → roster → review → generate)
 ├── lib/
 │   ├── types.ts           ← Data types + category config
 │   ├── ccilParser.ts      ← CCIL DOCX regex parser
-│   └── pdfGenerator.ts   ← jsPDF report builder
+│   ├── pdfGenerator.ts    ← jsPDF report builder
+│   ├── esrClient.ts       ← browser wrapper for /api/esr/snapshot
+│   └── esr/
+│       ├── types.ts       ← shared ESR types
+│       ├── refnum.ts      ← "EM 061C.26" → base ref + revision rank
+│       ├── diff.ts        ← NRSDB JSON flattening + new/amended/removed diff
+│       ├── nrsdbClient.ts ← session-cookie login + getEsrsByRouteCode (server)
+│       └── snapshotStore.ts ← esr_snapshots / esr_snapshot_runs persistence (server)
 ├── vercel.json
 ├── package.json
 └── README.md
