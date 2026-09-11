@@ -9,7 +9,8 @@
 // fetch. Ported from the nrsdb-esr-sync reference script (nrsdb_client.py);
 // Node's fetch has no cookie jar so a minimal one is implemented here.
 
-const BASE_URL  = 'https://nrsdb.uk'
+// NRSDB_BASE_URL exists only so tests can point the client at a stub.
+const BASE_URL  = (process.env.NRSDB_BASE_URL || 'https://nrsdb.uk').replace(/\/$/, '')
 const LOGIN_URL = `${BASE_URL}/login.php`
 const ESR_URL   = `${BASE_URL}/ajax/get.php`
 const TIMEOUT_MS = 20_000
@@ -72,6 +73,17 @@ class CookieJar {
     }
   }
 
+  // Seed from a captured Cookie header ("a=b; c=d"), e.g. document.cookie
+  // copied from a logged-in browser or the value pasted from devtools.
+  seed(cookieHeader: string) {
+    for (const part of cookieHeader.split(';')) {
+      const eq = part.indexOf('=')
+      if (eq <= 0) continue
+      const name = part.slice(0, eq).trim(), value = part.slice(eq + 1).trim()
+      if (name) this.cookies.set(name, value)
+    }
+  }
+
   header(): string | null {
     if (this.cookies.size === 0) return null
     return Array.from(this.cookies.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
@@ -83,9 +95,14 @@ class CookieJar {
 // ── Client ───────────────────────────────────────────────────────────────────
 
 export interface NrsdbClientOptions {
-  email: string
-  password: string
+  email?: string
+  password?: string
+  cookie?: string           // a captured session; login() is then not needed
 }
+
+export type SessionPull =
+  | { ok: true; payload: unknown; cookie: string | null; httpStatus: number }
+  | { ok: false; status: 'expired' | 'blocked' | 'error'; httpStatus: number; detail: string }
 
 export class NrsdbClient {
   private jar = new CookieJar()
@@ -93,9 +110,45 @@ export class NrsdbClient {
   private readonly password: string
 
   constructor(opts: NrsdbClientOptions) {
-    if (!opts.email || !opts.password) throw new NrsdbAuthError('NRSDB email/password not provided.')
-    this.email = opts.email
-    this.password = opts.password
+    if (opts.cookie) this.jar.seed(opts.cookie)
+    if (!opts.cookie && (!opts.email || !opts.password)) throw new NrsdbAuthError('NRSDB email/password (or a session cookie) not provided.')
+    this.email = opts.email ?? ''
+    this.password = opts.password ?? ''
+  }
+
+  // The current Cookie header — after a pull this may carry a rotated session id.
+  cookieHeader(): string | null { return this.jar.header() }
+
+  // Pull the feed using ONLY the seeded session cookie: no login attempt,
+  // which is the whole point (the login page is what the edge blocks).
+  async pullWithSession(routeCode = 'EM', filter = 'imposed'): Promise<SessionPull> {
+    const params = new URLSearchParams({ r: 'getEsrsByRouteCode', routecode: routeCode, filter, _: String(Date.now()) })
+    const headers = {
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': `${BASE_URL}/listEsr.php?view=route&route=${encodeURIComponent(routeCode)}&filter=${encodeURIComponent(filter)}`,
+    }
+    let resp: Response, finalUrl: string
+    try {
+      ;({ resp, finalUrl } = await this.request(`${ESR_URL}?${params}`, { headers, followRedirects: true }))
+    } catch (e) {
+      return { ok: false, status: 'error', httpStatus: 0, detail: (e as Error).message }
+    }
+    const ct = resp.headers.get('content-type') ?? ''
+    const text = await resp.text().catch(() => '')
+    const snippet = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
+    if (resp.status === 403) {
+      return { ok: false, status: 'blocked', httpStatus: 403, detail: `HTTP 403 on the data route${resp.headers.get('x-stackprotect-id') ? ' (StackProtect)' : ''}` }
+    }
+    if (resp.status === 401 || finalUrl.includes('login') || !ct.startsWith('application/json')) {
+      return { ok: false, status: 'expired', httpStatus: resp.status, detail: `HTTP ${resp.status}, ${ct || 'no content-type'}${finalUrl.includes('login') ? ', redirected to login' : ''}${snippet ? ` · "${snippet}"` : ''}` }
+    }
+    if (!resp.ok) return { ok: false, status: 'error', httpStatus: resp.status, detail: `HTTP ${resp.status}` }
+    try {
+      return { ok: true, payload: JSON.parse(text), cookie: this.jar.header(), httpStatus: resp.status }
+    } catch {
+      return { ok: false, status: 'error', httpStatus: resp.status, detail: `Response was not JSON: "${snippet}"` }
+    }
   }
 
   private async request(url: string, init: RequestInit & { followRedirects?: boolean } = {}): Promise<{ resp: Response; finalUrl: string }> {
