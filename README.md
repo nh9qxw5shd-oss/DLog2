@@ -152,6 +152,28 @@ into DLog2 slots; cells like `AL`, `OFF`, `SPARE` are skipped. A shift whose
 start hour is between 06:00 and 17:59 lands on the day shift, otherwise the
 night shift. Manual entry remains available — the import only pre-fills.
 
+## Test Mode
+
+The **Test Mode** switch in the header (next to Settings) lets you run the whole
+process — upload a CCIL export, roster, weather, review — exactly as for a real
+log, and build the PDF, without writing anything to the database. Use it to
+trial new features or rehearse without risking duplicate reports or corrupted
+analytics.
+
+While it is on:
+
+- Generate skips the report / incidents / team-member / weather-statement save.
+- The NRSDB ESR pull still runs (so the section renders) but the route is told
+  `dryRun` and stores no snapshot; the stored baseline is untouched.
+- Read-only steps still run so the PDF is representative: continuation
+  lookup, historical charts, ESR baseline diff.
+- The PDF carries a TEST banner on every page, a diagonal TEST watermark, and
+  is saved as `EMCC_Daily_Report_<date>_TEST.pdf`.
+- The historical bulk import page is disabled.
+
+The setting is per browser (localStorage), survives reloads, and is shown as an
+amber banner under the header while active.
+
 ## Emergency Speed Restrictions (NRSDB snapshot)
 
 At the Generate step DLog2 calls `POST /api/esr/snapshot`, a Next.js route

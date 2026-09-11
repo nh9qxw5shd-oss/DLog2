@@ -6,6 +6,7 @@ import { ArrowLeft, Upload, Loader2, CheckCircle2, XCircle, Clock, AlertTriangle
 import { parseCCILCSV, makeHistoricLogState, PeriodSlice } from '@/lib/bulkImport'
 import { upsertReportData, isSupabaseConfigured } from '@/lib/supabaseClient'
 import { readCategorySettings } from '@/lib/categorySettings'
+import { useTestMode } from '@/lib/testMode'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,8 @@ export default function ImportPage() {
   const [dragover, setDragover]   = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const supabaseReady = isSupabaseConfigured()
+  const [testMode] = useTestMode()
+  const supabaseReady = isSupabaseConfigured() && !testMode
 
   // ── Parse uploaded file ────────────────────────────────────────────────────
 
@@ -175,12 +177,21 @@ export default function ImportPage() {
         {!supabaseReady && (
           <div className="flex items-start gap-3 p-4 rounded border" style={{ background: 'rgba(243,156,18,0.08)', borderColor: 'rgba(243,156,18,0.3)' }}>
             <AlertTriangle size={16} className="text-[#F39C12] mt-0.5 shrink-0" />
-            <div>
-              <p className="text-sm text-white font-semibold">Supabase not configured</p>
-              <p className="text-xs text-[#7A8BA8] mt-0.5">
-                Historical import requires a live Supabase connection. Add your credentials to <span className="font-mono text-[#E8EDF5]">.env.local</span> before proceeding.
-              </p>
-            </div>
+            {testMode ? (
+              <div>
+                <p className="text-sm text-white font-semibold">Test Mode is on — historical import disabled</p>
+                <p className="text-xs text-[#7A8BA8] mt-0.5">
+                  Bulk import writes straight to the database, so it is blocked while Test Mode is on. You can still parse and preview a CSV. Switch Test Mode off on the main page to import.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-sm text-white font-semibold">Supabase not configured</p>
+                <p className="text-xs text-[#7A8BA8] mt-0.5">
+                  Historical import requires a live Supabase connection. Add your credentials to <span className="font-mono text-[#E8EDF5]">.env.local</span> before proceeding.
+                </p>
+              </div>
+            )}
           </div>
         )}
 

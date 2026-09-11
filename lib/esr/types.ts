@@ -65,7 +65,8 @@ export interface EsrSnapshotResult {
   capturedAt: string         // ISO timestamp of capture
   baselineDate: string | null
   baselineCapturedAt: string | null
-  persisted: boolean         // false when Supabase was not configured
+  persisted: boolean         // false when Supabase was not configured or dryRun
+  dryRun?: boolean           // true when the caller asked for no writes (Test Mode)
   persistError?: string      // set when the snapshot could not be stored
   counts: {
     active: number

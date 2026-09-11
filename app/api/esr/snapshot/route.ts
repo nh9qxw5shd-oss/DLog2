@@ -4,7 +4,9 @@
 // Supabase, diffs it against the most recent prior snapshot and returns the
 // classified list for the PDF.
 //
-// Body: { "reportDate": "YYYY-MM-DD" }   (the DLog2 log date, recorded on the run row)
+// Body: { "reportDate": "YYYY-MM-DD", "dryRun": false }
+//   reportDate — the DLog2 log date, recorded on the run row
+//   dryRun     — Test Mode: scrape + baseline diff as normal, but write nothing
 //
 // Server-only env (never NEXT_PUBLIC_*):
 //   NRSDB_EMAIL, NRSDB_PASSWORD      — required; without them the response is
@@ -51,15 +53,19 @@ export async function POST(req: NextRequest) {
   }
 
   let reportDate: string | null = null
+  let dryRun = false
   try {
     const body = await req.json().catch(() => ({}))
     const rd = typeof body?.reportDate === 'string' ? body.reportDate : ''
     if (/^\d{4}-\d{2}-\d{2}$/.test(rd)) reportDate = rd
+    dryRun = body?.dryRun === true
   } catch { /* body optional */ }
 
   const cacheKey = `${routeCode}|${filter}`
   if (cache && cache.key === cacheKey && Date.now() - cache.at < CACHE_TTL_MS) {
-    return NextResponse.json(cache.result)
+    // A cached result was persisted by a real run; a dry-run caller may reuse
+    // it (it reflects the same live pull) but is told nothing was written by it.
+    return NextResponse.json(dryRun ? { ...cache.result, dryRun: true } : cache.result)
   }
 
   // 1. Scrape ──────────────────────────────────────────────────────────────
@@ -114,7 +120,7 @@ export async function POST(req: NextRequest) {
 
   // 3. Persist ─────────────────────────────────────────────────────────────
   let persisted = false
-  if (sb && !persistError) {
+  if (sb && !persistError && !dryRun) {
     try {
       await persistSnapshot(sb, {
         routeCode, snapshotDate, reportDate, capturedAt, rows,
@@ -140,6 +146,7 @@ export async function POST(req: NextRequest) {
     baselineDate,
     baselineCapturedAt,
     persisted,
+    ...(dryRun ? { dryRun: true } : {}),
     ...(persistError ? { persistError } : {}),
     counts: {
       active: rows.length,

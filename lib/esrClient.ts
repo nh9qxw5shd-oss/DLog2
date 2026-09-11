@@ -10,12 +10,14 @@ import type { EsrSnapshotResponse } from './esr/types'
 
 export type { EsrSnapshotResponse, EsrSnapshotResult, EsrSnapshotFailure, EsrRow, EsrStatus, EsrFieldChange } from './esr/types'
 
-export async function fetchEsrSnapshot(reportDate: string): Promise<EsrSnapshotResponse> {
+// `dryRun` (Test Mode) still pulls from NRSDB and diffs against the stored
+// baseline, but the server writes nothing.
+export async function fetchEsrSnapshot(reportDate: string, opts: { dryRun?: boolean } = {}): Promise<EsrSnapshotResponse> {
   try {
     const resp = await fetch('/api/esr/snapshot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reportDate }),
+      body: JSON.stringify({ reportDate, dryRun: !!opts.dryRun }),
       cache: 'no-store',
     })
     const text = await resp.text()

@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
-  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin
+  Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin, FlaskConical
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
@@ -25,6 +25,7 @@ import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from 
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 import { fetchEsrSnapshot, EsrSnapshotResponse } from '@/lib/esrClient'
+import { useTestMode } from '@/lib/testMode'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -1407,7 +1408,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
 
 // ─── Step 4: Generate ─────────────────────────────────────────────────────────
 
-function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
+function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
   const [generating, setGenerating] = useState(false)
   const [done, setDone]             = useState(false)
   const [error, setError]           = useState('')
@@ -1426,12 +1427,17 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
 
     try {
       if (isSupabaseConfigured()) {
-        // 1. Annotate continuations, then push to Supabase
+        // 1. Annotate continuations (read-only), then push to Supabase —
+        //    unless Test Mode is on, in which case nothing is written.
         setStatusMsg('Checking for carried-over incidents…')
         pdfLog = await annotateWithContinuations(log)
 
-        setStatusMsg('Syncing with database…')
-        await upsertReportData(pdfLog, { force })
+        if (testMode) {
+          setStatusMsg('Test Mode — skipping database save…')
+        } else {
+          setStatusMsg('Syncing with database…')
+          await upsertReportData(pdfLog, { force })
+        }
 
         // 2. Fetch all historical data for chart rendering
         setStatusMsg('Fetching historical trends…')
@@ -1449,12 +1455,12 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
       // today's snapshot and diff against the previous one. A failure here
       // never blocks the log — the PDF prints the reason in the ESR section.
       setStatusMsg('Fetching ESRs from NRSDB…')
-      const esrResult = await fetchEsrSnapshot(pdfLog.date)
+      const esrResult = await fetchEsrSnapshot(pdfLog.date, { dryRun: testMode })
       setEsr(esrResult)
 
       // 4. Build and download PDF (with charts + ESRs if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult)
+      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode })
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
@@ -1494,6 +1500,19 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
         <p className="text-sm text-[#7A8BA8]">Review summary then generate the OFFICIAL-SENSITIVE PDF.</p>
       </div>
 
+      {testMode && (
+        <div className="flex items-start gap-3 p-4 rounded bg-[rgba(243,156,18,0.12)] border border-[rgba(243,156,18,0.5)]">
+          <FlaskConical size={16} className="text-amber-400 mt-0.5 shrink-0" />
+          <div className="text-sm">
+            <p className="text-amber-300 font-semibold">Test Mode is on — nothing will be saved.</p>
+            <p className="text-[#C9A257] text-xs mt-0.5">
+              The PDF builds exactly as normal (continuation check, historical charts and the NRSDB ESR pull all run read-only),
+              but no report, incidents, weather statement or ESR snapshot are written. The PDF is watermarked TEST and saved with a _TEST suffix.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="card p-5 space-y-4">
         <div className="flex items-center gap-3 pb-3 border-b border-[rgba(74,111,165,0.2)]">
           <div className="w-2 h-8 bg-[#E05206] rounded" />
@@ -1531,7 +1550,9 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
                   ({esr.counts.active} imposed · {esr.counts.new} new · {esr.counts.amended} amended · {esr.counts.removed} removed
                   {esr.baselineDate ? ` vs ${esr.baselineDate}` : ' · first snapshot'})
                 </span>
-                {!esr.persisted && <span className="text-amber-400">— snapshot NOT stored</span>}
+                {esr.dryRun
+                  ? <span className="text-amber-400">— snapshot not stored (Test Mode)</span>
+                  : !esr.persisted && <span className="text-amber-400">— snapshot NOT stored</span>}
               </div>
             : <div className="flex items-center gap-2 text-amber-400">
                 <AlertTriangle size={11} />
@@ -1539,6 +1560,11 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
               </div>
           }
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
+          {isSupabaseConfigured() && (
+            testMode
+              ? <div className="flex items-center gap-2 text-amber-400"><FlaskConical size={11} /> Database save SKIPPED (Test Mode)</div>
+              : <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Report, incidents &amp; weather statement saved to database</div>
+          )}
           {isSupabaseConfigured()
             ? <div className="flex items-center gap-2">
                 <Check size={11} className="text-[#27AE60]" />
@@ -1572,7 +1598,7 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
         <div className="flex items-center gap-3 p-4 rounded bg-[rgba(39,174,96,0.1)] border border-[rgba(39,174,96,0.3)]">
           <Check size={16} className="text-green-400" />
           <p className="text-green-400 text-sm font-medium">
-            PDF downloaded successfully.
+            {testMode ? 'TEST PDF downloaded — nothing was saved.' : 'PDF downloaded successfully.'}
             {dbReports !== null && ` Historical trends from ${dbReports} report${dbReports !== 1 ? 's' : ''} included.`}
             {esr?.ok && ` ${esr.counts.active} ESR${esr.counts.active !== 1 ? 's' : ''} listed.`}
           </p>
@@ -1583,19 +1609,60 @@ function GenerateStep({ log, onBack }: { log: LogState; onBack: () => void }) {
         <button onClick={() => handle()} disabled={generating}
           className={cn(
             'w-full py-3 text-white text-sm font-bold rounded flex items-center justify-center gap-3 transition-all',
-            generating ? 'bg-[#4A6FA5] cursor-not-allowed' : 'bg-[#E05206] hover:bg-[#c44804]'
+            generating ? 'bg-[#4A6FA5] cursor-not-allowed'
+              : testMode ? 'bg-[#B7791F] hover:bg-[#9A6519]'
+              : 'bg-[#E05206] hover:bg-[#c44804]'
           )}>
           {generating
             ? <><Loader2 size={16} className="animate-spin" /> {statusMsg || 'Building PDF…'}</>
             : done
-            ? <><RefreshCw size={16} /> Regenerate PDF</>
+            ? <><RefreshCw size={16} /> {testMode ? 'Regenerate TEST PDF' : 'Regenerate PDF'}</>
+            : testMode
+            ? <><FlaskConical size={16} /> Generate TEST PDF (no save)</>
             : <><Download size={16} /> Generate &amp; Download PDF</>}
         </button>
-        <p className="text-center text-xs text-[#4A5A72] font-mono">OFFICIAL-SENSITIVE — Handle per NR information policy</p>
+        <p className="text-center text-xs text-[#4A5A72] font-mono">
+          {testMode ? 'TEST MODE — output is watermarked and not a live log' : 'OFFICIAL-SENSITIVE — Handle per NR information policy'}
+        </p>
       </div>
 
       <button onClick={onBack} className="w-full py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">← Back to Review</button>
     </div>
+  )
+}
+
+// ─── Test Mode toggle (header) ────────────────────────────────────────────────
+
+function TestModeToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label="Test Mode"
+      title={on
+        ? 'Test Mode ON — Generate writes nothing to the database. Click to return to live.'
+        : 'Test Mode OFF — live. Click to run the process without saving anything.'}
+      onClick={() => onChange(!on)}
+      className={cn(
+        'flex items-center gap-2 px-2 py-1 rounded border text-xs font-mono transition-colors',
+        on
+          ? 'border-amber-400 bg-[rgba(243,156,18,0.15)] text-amber-300'
+          : 'border-[rgba(74,111,165,0.4)] text-[#4A5A72] hover:text-[#7A8BA8]'
+      )}
+    >
+      <FlaskConical size={12} />
+      <span>Test Mode</span>
+      <span className={cn(
+        'relative inline-block w-7 h-3.5 rounded-full transition-colors',
+        on ? 'bg-amber-400' : 'bg-[#2A3A55]'
+      )}>
+        <span className={cn(
+          'absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all',
+          on ? 'left-4' : 'left-0.5'
+        )} />
+      </span>
+    </button>
   )
 }
 
@@ -1605,6 +1672,7 @@ export default function Home() {
   const [step, setStep] = useState(1)
   const [log,  setLog]  = useState<LogState>(BLANK_LOG)
   const [knownNames, setKnownNames] = useState<string[]>([])
+  const [testMode, setTestMode] = useTestMode()
 
   // Set a default date safely after mount — avoids SSR/client hydration
   // mismatch. Default to the date of the 06:00→06:00 period currently in
@@ -1659,11 +1727,21 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             <a href="/settings" className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
-            <span className="pulse-dot w-2 h-2 rounded-full bg-[#27AE60] inline-block" />
+            <TestModeToggle on={testMode} onChange={setTestMode} />
+            <span className={cn('pulse-dot w-2 h-2 rounded-full inline-block', testMode ? 'bg-amber-400' : 'bg-[#27AE60]')} />
             <LiveClock />
           </div>
         </div>
       </header>
+
+      {testMode && (
+        <div className="bg-[#B7791F] text-[#0F1729]">
+          <div className="max-w-5xl mx-auto px-6 py-1.5 flex items-center gap-2 text-xs font-semibold">
+            <FlaskConical size={13} />
+            TEST MODE — run the full process as normal; on Generate nothing is written to the database and the PDF is watermarked TEST.
+          </div>
+        </div>
+      )}
 
       {/* Step bar */}
       <div className="border-b border-[rgba(74,111,165,0.15)] bg-[#0F1729]">
@@ -1685,7 +1763,7 @@ export default function Home() {
             onUpdate={incidents => update({ incidents })}
             onNext={() => setStep(4)} onBack={() => setStep(2)} />
         )}
-        {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} />}
+        {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} testMode={testMode} />}
       </main>
 
       <footer className="border-t border-[rgba(74,111,165,0.15)] mt-12">

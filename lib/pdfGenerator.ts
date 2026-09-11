@@ -115,7 +115,9 @@ export async function generatePDF(
   chartImages?: ChartImages,
   categorySettings?: CategorySettings,
   esr?: EsrSnapshotResponse | null,
+  options: { testMode?: boolean } = {},
 ): Promise<void> {
+  const testMode    = !!options.testMode
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
@@ -152,10 +154,17 @@ export async function generatePDF(
   const drawCoverHeader = (): number => {
     sfc(C.navy); rc(0, 0, W, 52)
     sfc(C.orange); rc(0, 52, W, 4)
-    // Classification bar
-    sfc([160, 45, 25]); rc(0, 56, W, 7)
-    sf('bold', 7); stc(C.white)
-    tx('OFFICIAL – SENSITIVE  |  NOT FOR GENERAL DISTRIBUTION', W/2, 61, { align: 'center' })
+    // Classification bar — in Test Mode it becomes the TEST warning so a
+    // trial build can never pass for a real log.
+    if (testMode) {
+      sfc(C.amber); rc(0, 56, W, 7)
+      sf('bold', 7); stc(C.navy)
+      tx('TEST MODE  |  NOTHING SAVED TO DATABASE  |  NOT A LIVE LOG — DO NOT DISTRIBUTE', W/2, 61, { align: 'center' })
+    } else {
+      sfc([160, 45, 25]); rc(0, 56, W, 7)
+      sf('bold', 7); stc(C.white)
+      tx('OFFICIAL – SENSITIVE  |  NOT FOR GENERAL DISTRIBUTION', W/2, 61, { align: 'center' })
+    }
     // Logo wordmark
     sf('bold', 20); stc(C.white); tx('NetworkRail', M, 19)
     sf('normal', 8); stc(C.steel); tx('EAST MIDLANDS CONTROL CENTRE', M, 27)
@@ -181,7 +190,19 @@ export async function generatePDF(
     sf('bold', 8); stc(C.white); tx('EMCC DAILY OPERATIONS REPORT', M, 9)
     sf('normal', 7); stc(C.offWhite)
     tx(log.date ? formatDisplayDate(log.date) : '', W - M, 9, { align: 'right' })
-    sf('bold', 6); stc([180, 50, 30]); tx('OFFICIAL – SENSITIVE', W/2, 9, { align: 'center' })
+    if (testMode) { sf('bold', 6); stc(C.amber); tx('TEST MODE — NOT SAVED — NOT A LIVE LOG', W/2, 9, { align: 'center' }) }
+    else { sf('bold', 6); stc([180, 50, 30]); tx('OFFICIAL – SENSITIVE', W/2, 9, { align: 'center' }) }
+  }
+
+  // Large translucent diagonal "TEST" across every page (drawn last, in the
+  // footer pass, so it sits over the content without hiding it).
+  const drawTestWatermark = () => {
+    const anyDoc = doc as any
+    const hasGState = typeof anyDoc.setGState === 'function' && typeof anyDoc.GState === 'function'
+    if (hasGState) anyDoc.setGState(new anyDoc.GState({ opacity: 0.10 }))
+    sf('bold', 110); stc(C.red)
+    tx('TEST', W / 2, H / 2 + 20, { align: 'center', angle: 35 })
+    if (hasGState) anyDoc.setGState(new anyDoc.GState({ opacity: 1 }))
   }
 
   // ── Footer ────────────────────────────────────────────────────────────────
@@ -556,7 +577,11 @@ export async function generatePDF(
       : 'No previous snapshot — first capture, so no change status is available. Highlighting starts from the next log.'
     tx(`${asAt}  ${vs}`, M, y)
     y += 4.5
-    if (!esr.persisted) {
+    if (esr.dryRun) {
+      sf('italic', 6.5); stc([140, 80, 10])
+      tx('Test Mode — snapshot not stored; the stored baseline is unchanged.', M, y)
+      y += 4.5
+    } else if (!esr.persisted) {
       sf('italic', 6.5); stc(C.red)
       tx(`Snapshot not stored${esr.persistError ? `: ${esr.persistError.slice(0, 140)}` : ' (Supabase not configured)'} — the next log cannot compare against today.`, M, y)
       y += 4.5
@@ -1217,12 +1242,13 @@ export async function generatePDF(
   for (let p = 1; p <= total; p++) {
     doc.setPage(p)
     drawFooter(p, total)
+    if (testMode) drawTestWatermark()
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────
 
   const dateStr = log.date ? log.date.replace(/-/g, '') : 'unknown'
-  doc.save(`EMCC_Daily_Report_${dateStr}.pdf`)
+  doc.save(`EMCC_Daily_Report_${dateStr}${testMode ? '_TEST' : ''}.pdf`)
 }
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
