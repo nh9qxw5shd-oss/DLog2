@@ -29,6 +29,8 @@ export interface EsrRow {
   whenImposed: string | null // ISO 8601 when parseable, else null
   etrRaw: string | null
   etr: string | null         // ISO 8601 when parseable, else null
+  updatedAtRaw: string | null // NRSDB's own record timestamp (updated_at)
+  updatedAt: string | null
 
   fmsNumber: string | null
   ccilNumber: string | null

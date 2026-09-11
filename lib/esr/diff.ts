@@ -32,32 +32,49 @@ function num(v: unknown): number | null {
   return null
 }
 
-// NRSDB's `lines` structure has not been pinned down (the reference script
-// stored it verbatim as jsonb). Render whatever it is as readable text:
-// strings joined with ", "; objects reduced to their first name-like value.
-const LINE_NAME_KEYS = ['name', 'line', 'linename', 'line_name', 'description', 'lineDescription', 'code', 'linecode']
+// NRSDB's `lines` entries look like (from a real EM feed):
+//   { elr:{elrcode…}, trackId, routeheader:"Primary Line", direction:"Down Direction",
+//     linedescription:"Down Main", boards:[{type:"commencement", miles:30, chains:52}, {type:"termination", …}, …] }
+// Render each as "Down Main (30m 52ch – 30m 57ch)" using the commencement and
+// termination boards, which is what control staff need to place the ESR.
+// Older/other shapes (plain strings, {name}) are still handled.
+const LINE_NAME_KEYS = ['linedescription', 'lineDescription', 'line_description', 'name', 'line', 'linename', 'line_name', 'description', 'direction', 'routeheader', 'code', 'linecode']
+
+function mileage(b: Json): string | null {
+  const mi = typeof b.miles === 'number' ? b.miles : (typeof b.miles === 'string' && b.miles.trim() ? Number(b.miles) : NaN)
+  const ch = typeof b.chains === 'number' ? b.chains : (typeof b.chains === 'string' && b.chains.trim() ? Number(b.chains) : NaN)
+  if (!Number.isFinite(mi)) return null
+  return Number.isFinite(ch) ? `${mi}m ${String(ch).padStart(2, '0')}ch` : `${mi}m`
+}
+
+export function describeLine(line: unknown): string | null {
+  if (line === null || line === undefined) return null
+  if (typeof line === 'string' || typeof line === 'number') return String(line).trim() || null
+  if (typeof line !== 'object') return null
+  const o = line as Json
+  let name: string | null = null
+  for (const k of LINE_NAME_KEYS) { const v = str(o[k]); if (v) { name = v; break } }
+
+  let span: string | null = null
+  if (Array.isArray(o.boards)) {
+    const boards = o.boards.filter(b => b && typeof b === 'object') as Json[]
+    const at = (t: string) => boards.find(b => typeof b.type === 'string' && b.type.toLowerCase() === t)
+    const from = at('commencement'), to = at('termination')
+    const f = from ? mileage(from) : null, t = to ? mileage(to) : null
+    if (f && t) span = `${f} – ${t}`
+    else if (f) span = `from ${f}`
+    else if (t) span = `to ${t}`
+  }
+  if (name && span) return `${name} (${span})`
+  return name ?? span
+}
 
 export function flattenLines(lines: unknown): string | null {
   if (lines === null || lines === undefined) return null
   if (typeof lines === 'string') return lines.trim() || null
   const items = Array.isArray(lines) ? lines : [lines]
-  const parts: string[] = []
-  for (const item of items) {
-    if (item === null || item === undefined) continue
-    if (typeof item === 'string' || typeof item === 'number') { parts.push(String(item).trim()); continue }
-    if (typeof item === 'object') {
-      const o = item as Json
-      let picked: string | null = null
-      for (const k of LINE_NAME_KEYS) {
-        const s = str(o[k]); if (s) { picked = s; break }
-      }
-      if (!picked) {
-        for (const v of Object.values(o)) { const s = str(v); if (s) { picked = s; break } }
-      }
-      if (picked) parts.push(picked)
-    }
-  }
-  const out = parts.filter(Boolean).join(', ')
+  const parts = items.map(describeLine).filter((v): v is string => !!v)
+  const out = parts.join('; ')
   return out || null
 }
 
@@ -133,6 +150,7 @@ export function flattenEsr(item: unknown): EsrRow {
 
   const whenImposedRaw = str(it.whenimposed)
   const etrRaw         = str(it.etr)
+  const updatedAtRaw   = str(it.updated_at ?? it.updatedAt)
 
   return {
     baseRef: parsed.baseRef,
@@ -158,6 +176,8 @@ export function flattenEsr(item: unknown): EsrRow {
     whenImposed: parseNrsdbDate(whenImposedRaw),
     etrRaw,
     etr: parseNrsdbDate(etrRaw),
+    updatedAtRaw,
+    updatedAt: parseNrsdbDate(updatedAtRaw),
 
     fmsNumber: str(refs.fmsnumber),
     ccilNumber: str(refs.ccilnumber),

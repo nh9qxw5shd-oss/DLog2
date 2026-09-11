@@ -36,23 +36,32 @@ export function parsePastedFeed(text: string, expectedRoute?: string): PastePars
     if (/login|password|sign in/i.test(s)) {
       return bad('login_page', 'That was the NRSDB login page, so you are not logged in to NRSDB in that browser. Log in to nrsdb.uk, then click "Open NRSDB feed" again and copy the data it shows.')
     }
-    return bad('html', 'That was a web page, not the ESR data. Click "Open NRSDB feed", wait for the tab to show the raw data (it starts with [{"id":), then Ctrl+A, Ctrl+C.')
+    return bad('html', 'That was a web page, not the ESR data. Click "Open NRSDB feed", wait for the tab to show the raw data (it starts with {"count":), then Ctrl+A, Ctrl+C.')
   }
 
   let parsed = tryJson(s)
   if (parsed === undefined) {
+    // The real feed is {"count":…,"data":[…]}. A copy that starts like JSON
+    // but does not end like it was cut off — say so before trying any
+    // inner-block salvage, which could otherwise "succeed" on a nested array.
+    const startsJson = s.startsWith('{') || s.startsWith('[')
+    const endsJson = s.endsWith('}') || s.endsWith(']')
+    if (startsJson && !endsJson) {
+      return bad('truncated', 'The paste is cut off — the data starts correctly but does not end with } or ]. Go back to the NRSDB tab, press Ctrl+A (select ALL) then Ctrl+C, and paste again.')
+    }
     // Browser JSON viewers sometimes wrap the text, or the copy picked up a
-    // header line. Try the outermost [...] block.
-    const a = s.indexOf('['), b = s.lastIndexOf(']')
-    if (a >= 0 && b > a) parsed = tryJson(s.slice(a, b + 1))
+    // header line. Try the outermost {...} block, then the outermost [...].
+    const oa = s.indexOf('{'), ob = s.lastIndexOf('}')
+    if (oa >= 0 && ob > oa) parsed = tryJson(s.slice(oa, ob + 1))
+    if (parsed === undefined) {
+      const a = s.indexOf('['), b = s.lastIndexOf(']')
+      if (a >= 0 && b > a) parsed = tryJson(s.slice(a, b + 1))
+    }
   }
   if (parsed === undefined) {
     // Firefox/Edge "tree" viewers copy as "id 123 refnum EM 061.26" lines.
-    if (/^\s*(id|refnum)\s*[:\t ]/im.test(s) || /\n\s*\d+\s*\n/.test(s)) {
+    if (/^\s*(id|refnum|count|data)\s*[:\t ]/im.test(s) || /\n\s*\d+\s*\n/.test(s)) {
       return bad('tree_view', 'The browser copied its formatted tree view rather than the raw data. In the NRSDB tab click "Raw Data" (Firefox) or untick "Pretty-print" (Edge/Chrome), then Ctrl+A, Ctrl+C and paste again.')
-    }
-    if (s.startsWith('[') && !s.endsWith(']')) {
-      return bad('truncated', 'The paste is cut off — the data starts correctly but does not end with ]. Go back to the NRSDB tab, press Ctrl+A (select ALL) then Ctrl+C, and paste again.')
     }
     return bad('not_json', 'Could not read that as NRSDB data. Click "Open NRSDB feed", press Ctrl+A then Ctrl+C in the tab that opens, come back and click Paste.')
   }

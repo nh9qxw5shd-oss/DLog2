@@ -582,8 +582,9 @@ export async function generatePDF(
     const vs = esr.baselineDate
       ? `Changes are against the previous snapshot of ${fmtSnapshotStamp(esr.baselineCapturedAt) || formatDisplayDate(esr.baselineDate)}.`
       : 'No previous snapshot — first capture, so no change status is available. Highlighting starts from the next log.'
-    tx(`${asAt}  ${vs}`, M, y)
-    y += 4.5
+    const provLines = doc.splitTextToSize(`${asAt}  ${vs}`, W - M * 2).slice(0, 2)
+    tx(provLines, M, y)
+    y += 3.6 * provLines.length + 1
     if (stored) {
       const ageH = (Date.now() - new Date(esr.capturedAt).getTime()) / 36e5
       const stale = Number.isFinite(ageH) && ageH > 20

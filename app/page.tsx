@@ -1531,7 +1531,7 @@ function EsrCard({ esr, loading, fresh, skipped, testMode, onSkip, onUnskip, onP
             value={manualText}
             onChange={e => setManualText(e.target.value)}
             onPaste={e => { const t = e.clipboardData.getData('text'); if (t) { e.preventDefault(); setManualText(t); submit(t) } }}
-            placeholder='Click here and press Ctrl+V. The data starts with [{"id":'
+            placeholder='Click here and press Ctrl+V. The data starts with {"count":'
             className="w-full h-24 text-xs font-mono p-2 rounded bg-[#0F1729] border border-[rgba(74,111,165,0.4)] text-white"
           />
           <button onClick={() => submit(manualText)} disabled={busy || !manualText.trim()}

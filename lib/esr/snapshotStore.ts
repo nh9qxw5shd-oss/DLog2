@@ -40,6 +40,8 @@ interface SnapshotDbRow {
   when_imposed: string | null
   etr_raw: string | null
   etr: string | null
+  updated_at_raw?: string | null
+  nrsdb_updated_at?: string | null
   fms_number: string | null
   ccil_number: string | null
   tsr_reference: string | null
@@ -71,6 +73,8 @@ function toDb(row: EsrRow, snapshotDate: string, routeCode: string, capturedAt: 
     when_imposed: row.whenImposed,
     etr_raw: row.etrRaw,
     etr: row.etr,
+    updated_at_raw: row.updatedAtRaw,
+    nrsdb_updated_at: row.updatedAt,
     fms_number: row.fmsNumber,
     ccil_number: row.ccilNumber,
     tsr_reference: row.tsrReference,
@@ -101,6 +105,8 @@ function fromDb(r: SnapshotDbRow): EsrRow {
     whenImposed: r.when_imposed,
     etrRaw: r.etr_raw,
     etr: r.etr,
+    updatedAtRaw: r.updated_at_raw ?? null,
+    updatedAt: r.nrsdb_updated_at ?? null,
     fmsNumber: r.fms_number,
     ccilNumber: r.ccil_number,
     tsrReference: r.tsr_reference,
