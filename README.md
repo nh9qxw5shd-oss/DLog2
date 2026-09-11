@@ -232,6 +232,32 @@ clicks **Build without ESR data**, in which case the PDF states that no ESR
 data was supplied. A snapshot pasted by one operator serves every later build
 that day, on every deployment, since it lives in Supabase.
 
+### Unattended pulls with a stored session (the automation path)
+
+Probing shows NRSDB's edge blocks the **login page** from datacentre IPs but
+not the **data route**. So a session captured once from an allowed browser
+lets the deployed server pull the feed itself:
+
+1. Settings → "NRSDB session". Supply the session either with the one-click
+   bookmark (click it while logged in on nrsdb.uk; needs the cookie not to be
+   HttpOnly) or by pasting the `PHPSESSID` value from F12 → Cookies.
+   The server stores it (service-role-only table `esr_session`) and
+   immediately test-pulls; a working session stores today's snapshot on the
+   spot.
+2. A Supabase `pg_cron` job calls `GET /api/esr/keepalive?token=…` every five
+   minutes (`pg_net`), which pulls with the session, keeps the PHP session
+   alive and refreshes today's snapshot. Every check is logged in
+   `esr_session_checks`, so the session's real lifetime can be read off the
+   history.
+3. The log build tries the stored session first, then the live login, then
+   the stored snapshot, then the paste flow. If NRSDB answers the keep-alive
+   with its login page the session is marked expired, the Settings card shows
+   it, and Generate reverts to the paste step until a new session is supplied.
+
+Requires `SUPABASE_SERVICE_ROLE_KEY` and `ESR_INGEST_TOKEN` on the host. The
+stored cookie is a live login: it dies with a password change or NRSDB
+restart, and it never reaches the browser.
+
 ### Alternative: an unattended push from a machine NRSDB allows
 
 If a machine outside the datacentre ranges is available (a home PC, a Pi, a
@@ -290,6 +316,8 @@ emcc-daily-log/
 ├── app/
 │   ├── api/esr/snapshot/route.ts ← ESR live pull → stored fallback, + ?probe=1 diagnostics (server)
 │   ├── api/esr/ingest/route.ts   ← token-protected ingest of raw NRSDB payload (server)
+│   ├── api/esr/session/route.ts  ← store/test/forget the NRSDB session cookie (server)
+│   ├── api/esr/keepalive/route.ts← pg_cron target: pull with the stored session every 5 min (server)
 │   ├── globals.css
 │   ├── layout.tsx
 │   └── page.tsx          ← Full app (upload → roster → review → generate)
@@ -306,6 +334,8 @@ emcc-daily-log/
 │       ├── diff.ts        ← NRSDB JSON flattening + new/amended/removed diff
 │       ├── paste.ts       ← validates an operator-pasted NRSDB feed, with plain-English guidance
 │       ├── pipeline.ts    ← payload → flatten → diff → store; stored-snapshot read-back (server)
+│       ├── sessionStore.ts← esr_session / esr_session_checks persistence (server)
+│       ├── sessionPull.ts ← pull with the stored session, record outcome, run pipeline (server)
 │       ├── nrsdbClient.ts ← session-cookie login + getEsrsByRouteCode (server)
 │       └── snapshotStore.ts ← esr_snapshots / esr_snapshot_runs persistence (server)
 ├── vercel.json

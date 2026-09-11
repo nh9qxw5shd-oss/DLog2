@@ -13,6 +13,7 @@ import {
 } from '@/lib/categorySettings'
 import { CCIL_LABEL_MAP, normalizeForLookup } from '@/lib/ccilParser'
 import { isSupabaseConfigured } from '@/lib/supabaseClient'
+import NrsdbSessionCard from './NrsdbSessionCard'
 
 const SEVERITIES: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
 const SEV_COLORS: Record<Severity, string> = {
@@ -469,6 +470,8 @@ export default function SettingsPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-5">
+
+        <NrsdbSessionCard />
 
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

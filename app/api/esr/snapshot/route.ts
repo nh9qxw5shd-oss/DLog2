@@ -31,6 +31,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { NrsdbClient, NrsdbAuthError, NrsdbFetchError, NrsdbPayloadError, LoginOutcome } from '@/lib/esr/nrsdbClient'
 import { buildFromPayload, loadStoredResult } from '@/lib/esr/pipeline'
 import { getServerSupabase, fetchLatestRun } from '@/lib/esr/snapshotStore'
+import { pullWithStoredSession } from '@/lib/esr/sessionPull'
+import { getSession, summarise, recentChecks, SessionAccessError } from '@/lib/esr/sessionStore'
 import type { EsrSnapshotResponse, EsrSnapshotResult, EsrSnapshotFailure } from '@/lib/esr/types'
 
 export const runtime = 'nodejs'
@@ -106,9 +108,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(dryRun ? { ...cache.result, dryRun: true } : cache.result)
   }
 
-  // 1. Live pull ───────────────────────────────────────────────────────────
+  // 1a. Stored NRSDB session (unattended path) ────────────────────────────
+  let sessionNote = ''
+  if (sb) {
+    const viaSession = await pullWithStoredSession(sb, routeCode, { trigger: 'build', persist: !dryRun, reportDate, filter })
+    if (viaSession.status === 'ok') {
+      const result = dryRun ? { ...viaSession.result, dryRun: true } : viaSession.result
+      if (result.persisted) cache = { at: Date.now(), key: cacheKey, result }
+      return NextResponse.json(result)
+    }
+    if (viaSession.status !== 'none' && viaSession.status !== 'unavailable') sessionNote = viaSession.message
+  }
+
+  // 1b. Live login pull (works only from non-datacentre hosts) ─────────────
   let live: LiveOutcome = { ok: false, reason: 'not_configured', message: 'NRSDB_EMAIL / NRSDB_PASSWORD are not set on the server.' }
   if (credsSet) live = await livePull(email, password, routeCode, filter)
+  if (!live.ok && sessionNote) live = { ...live, message: `${sessionNote} ${live.message}` }
 
   if (live.ok) {
     const result = await buildFromPayload({ payload: live.payload, routeCode, reportDate, dryRun, sb })
@@ -169,6 +184,23 @@ export async function GET(req: NextRequest) {
     } catch (e) { storedError = (e as Error).message }
   }
 
+  let session: unknown = null
+  let sessionCheck: unknown = null
+  if (sb) {
+    try {
+      const s = await getSession(sb, routeCode)
+      session = s ? { ...summarise(s), recent: await recentChecks(sb, routeCode, 8) } : null
+      if (s) {
+        const o = await pullWithStoredSession(sb, routeCode, { trigger: 'probe', persist: false })
+        sessionCheck = o.status === 'ok'
+          ? { status: 'ok', esrCount: o.esrCount, note: 'Data route reachable with the stored session; snapshot not stored by the probe.' }
+          : { status: o.status, message: o.message }
+      }
+    } catch (e) {
+      session = { error: e instanceof SessionAccessError ? e.message : (e as Error).message }
+    }
+  }
+
   let liveLogin: Omit<LoginOutcome, 'bodySnippet'> & { bodySnippet?: string } | { skipped: string } = { skipped: 'NRSDB credentials not set' }
   if (email && password) {
     try {
@@ -178,12 +210,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const sessionOk = !!(sessionCheck && (sessionCheck as { status?: string }).status === 'ok')
   return NextResponse.json({
     config,
     stored,
     ...(storedError ? { storedError } : {}),
+    session,
+    sessionCheck,
     liveLogin,
-    verdict: !email || !password
+    verdict: sessionOk
+      ? 'Stored NRSDB session works from this server: unattended pulls are possible. Keep it alive with the keepalive schedule.'
+      : !email || !password
       ? 'No NRSDB credentials on the server; the log will use the stored snapshot pushed via /api/esr/ingest.'
       : 'ok' in liveLogin && liveLogin.ok
         ? 'Live NRSDB login works from this server.'
