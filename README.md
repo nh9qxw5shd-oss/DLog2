@@ -232,11 +232,21 @@ clicks **Build without ESR data**, in which case the PDF states that no ESR
 data was supplied. A snapshot pasted by one operator serves every later build
 that day, on every deployment, since it lives in Supabase.
 
-### Unattended pulls with a stored session (the automation path)
+### Unattended pulls with a stored session (built, but blocked from every host tested)
 
-Probing shows NRSDB's edge blocks the **login page** from datacentre IPs but
-not the **data route**. So a session captured once from an allowed browser
-lets the deployed server pull the feed itself:
+The idea: NRSDB's edge blocks the **login page** from datacentre IPs, so hand
+the server a session captured from an allowed browser and let it pull the
+**data route** unattended. The code exists and works against a stub, but on
+11 Sep 2026 the data route returned **403 (StackProtect)** with a valid session
+from all three hosted networks available: Vercel functions, Supabase pg_net
+(AWS eu-west-1) and GitHub-hosted runners (Azure). The path is therefore
+dormant: the Settings card is hidden unless `NEXT_PUBLIC_ESR_SESSION_UI=1`,
+and no keep-alive schedule is registered. It becomes viable the day the NRSDB
+owner exempts `/ajax/get.php` from bot protection or allowlists a host — that
+is the ask to make, and it is a one-line change on their side, since the data
+route already requires a login and gains nothing from bot protection.
+
+How it works when enabled:
 
 1. Settings → "NRSDB session". Supply the session either with the one-click
    bookmark (click it while logged in on nrsdb.uk; needs the cookie not to be
