@@ -628,12 +628,11 @@ export async function generatePDF(
         esrSpeedCell(r),
         r.reason || '—',
         fmtEsrDate(r.whenImposed, r.whenImposedRaw),
-        fmtEsrDate(r.etr, r.etrRaw),
         entry.status === 'UNCHANGED' ? '' : entry.status,
       ])
       meta.push({ kind: 'row', status: entry.status })
       if (entry.status === 'AMENDED' && entry.changes?.length) {
-        body.push([{ content: `Amended: ${describeChanges(entry.changes as EsrFieldChange[])}`, colSpan: 9 }])
+        body.push([{ content: `Amended: ${describeChanges(entry.changes as EsrFieldChange[])}`, colSpan: 8 }])
         meta.push({ kind: 'changes' })
       }
     }
@@ -641,18 +640,17 @@ export async function generatePDF(
     autoTable(doc, {
       ...esrTableStyles,
       startY: y,
-      head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'ESR speed', 'Reason', 'Imposed', 'ETR', 'Status']],
+      head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'ESR speed', 'Reason', 'Imposed', 'Status']],
       body,
       columnStyles: {
         0: { cellWidth: 22 },
         1: { cellWidth: 17 },
         2: { cellWidth: 11 },
         3: { cellWidth: 'auto' },
-        4: { cellWidth: 17 },
-        5: { cellWidth: 34 },
-        6: { cellWidth: 17 },
-        7: { cellWidth: 17 },
-        8: { cellWidth: 14, halign: 'center' as const },
+        4: { cellWidth: 18 },
+        5: { cellWidth: 38 },
+        6: { cellWidth: 18 },
+        7: { cellWidth: 15, halign: 'center' as const },
       },
       didParseCell: (data: any) => {
         if (data.section !== 'body') return
@@ -667,10 +665,10 @@ export async function generatePDF(
         }
         if (m.status === 'NEW') {
           data.cell.styles.fillColor = ESR_NEW_BG
-          if (data.column.index === 8) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [20, 110, 60] }
+          if (data.column.index === 7) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [20, 110, 60] }
         } else if (m.status === 'AMENDED') {
           data.cell.styles.fillColor = ESR_AMEND_BG
-          if (data.column.index === 8) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [140, 80, 10] }
+          if (data.column.index === 7) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.textColor = [140, 80, 10] }
         }
         if (data.column.index === 0) data.cell.styles.fontStyle = 'bold'
       },
@@ -701,7 +699,7 @@ export async function generatePDF(
       autoTable(doc, {
         ...esrTableStyles,
         startY: y,
-        head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'Last speed', 'Reason', 'Imposed', 'Last ETR']],
+        head: [['Ref', 'DU', 'ELR', 'Location / Lines', 'Last speed', 'Reason', 'Imposed']],
         body: esr.removed.map(r => [
           esrRefCell(r),
           r.duName || '—',
@@ -710,17 +708,15 @@ export async function generatePDF(
           esrSpeedCell(r),
           r.reason || '—',
           fmtEsrDate(r.whenImposed, r.whenImposedRaw),
-          fmtEsrDate(r.etr, r.etrRaw),
         ]),
         columnStyles: {
           0: { cellWidth: 22 },
           1: { cellWidth: 17 },
           2: { cellWidth: 11 },
           3: { cellWidth: 'auto' },
-          4: { cellWidth: 17 },
-          5: { cellWidth: 34 },
-          6: { cellWidth: 17 },
-          7: { cellWidth: 17 },
+          4: { cellWidth: 18 },
+          5: { cellWidth: 38 },
+          6: { cellWidth: 18 },
         },
         didParseCell: (data: any) => {
           if (data.section !== 'body') return
