@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'crypto'
 import { buildFromPayload } from '@/lib/esr/pipeline'
+import { parsePastedFeed } from '@/lib/esr/paste'
 import { getServerSupabase } from '@/lib/esr/snapshotStore'
 
 export const runtime = 'nodejs'
@@ -63,6 +64,21 @@ export async function POST(req: NextRequest) {
 
   const sb = getServerSupabase()
   if (!sb) return NextResponse.json({ ok: false, reason: 'not_configured', message: 'Supabase is not configured on the server; nothing to store into.' }, { status: 503 })
+
+  // A client that could not parse NRSDB's reply (iOS Shortcuts, curl) may
+  // send it as text. Classify it the same way the paste box does, so the
+  // reply says "that was the login page" rather than a generic rejection.
+  if (typeof payload === 'string') {
+    const parsed = parsePastedFeed(payload, routeCode)
+    if (!parsed.ok) return NextResponse.json({ ok: false, reason: 'bad_payload', problem: parsed.problem, message: `NRSDB reply was not the ESR feed: ${parsed.message}` }, { status: 400 })
+    payload = parsed.payload
+  }
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && !('data' in (payload as object))) {
+    const keys = Object.keys(payload as object)
+    if (keys.length && keys.every(k => k.length <= 8)) {
+      return NextResponse.json({ ok: false, reason: 'bad_payload', message: `Body has key(s) ${keys.map(k => `"${k}"`).join(', ')} but no "payload". Send { "payload": <NRSDB reply>, "routeCode": "EM" }.` }, { status: 400 })
+    }
+  }
 
   const result = await buildFromPayload({ payload, routeCode, reportDate, dryRun, sb })
   return NextResponse.json(result, { status: result.ok ? 200 : 400 })
