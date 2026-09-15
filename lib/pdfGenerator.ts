@@ -9,6 +9,8 @@ import type { ChartImages } from './chartRenderer'
 import type { CategorySettings } from './categorySettings'
 import type { EsrSnapshotResponse, EsrRow, EsrFieldChange } from './esr/types'
 import { describeChanges } from './esr/diff'
+import type { OouRegister, OouItem, OouSection } from './outOfUse'
+import { OOU_SECTION_SPECS, fmtSince, daysSince, fmtStamp as fmtOouStamp } from './outOfUse'
 
 export type { ChartImages }
 
@@ -53,7 +55,7 @@ const SEV_COLOR: Record<string, RGB> = {
   INFO:     C.midGray,
 }
 
-// ─── SVG → PNG loader ─────────────────────────────────────────────────────────
+// ─── SVG → PNG loader ─────────────────────────────────────────────────────────────
 
 async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: number } | null> {
   try {
@@ -108,16 +110,17 @@ async function loadSvgAsImage(url: string): Promise<{ dataUrl: string; aspect: n
   }
 }
 
-// ─── Main export ──────────────────────────────────────────────────────────────
+// ─── Main export ────────────────────────────────────────────────────────────────
 
 export async function generatePDF(
   log: LogState,
   chartImages?: ChartImages,
   categorySettings?: CategorySettings,
   esr?: EsrSnapshotResponse | null,
-  options: { testMode?: boolean } = {},
+  options: { testMode?: boolean; outOfUse?: (OouRegister & { error?: string }) | null } = {},
 ): Promise<void> {
   const testMode    = !!options.testMode
+  const outOfUse    = options.outOfUse ?? null
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
   const insignia    = await loadSvgAsImage('/route-insignia.svg')
@@ -126,7 +129,7 @@ export async function generatePDF(
   const W = 210, H = 297, M = 14
   let y = 0
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   const sf  = (style: 'normal'|'bold'|'italic' = 'normal', size = 10) => {
     doc.setFont('helvetica', style); doc.setFontSize(size)
@@ -149,7 +152,7 @@ export async function generatePDF(
 
   const checkPage = (need: number) => { if (y + need > H - 18) newPage() }
 
-  // ── Cover header (page 1) ─────────────────────────────────────────────────
+  // ── Cover header (page 1) ───────────────────────────────────────────────────
 
   const drawCoverHeader = (): number => {
     sfc(C.navy); rc(0, 0, W, 52)
@@ -205,7 +208,7 @@ export async function generatePDF(
     if (hasGState) anyDoc.setGState(new anyDoc.GState({ opacity: 1 }))
   }
 
-  // ── Footer ────────────────────────────────────────────────────────────────
+  // ── Footer ─────────────────────────────────────────────────────────────────
 
   const drawFooter = (p: number, total: number) => {
     sfc(C.navy); rc(0, H - 12, W, 12)
@@ -215,7 +218,7 @@ export async function generatePDF(
     tx(log.createdBy ? `Compiled: ${log.createdBy}` : 'OFFICIAL – SENSITIVE', W - M, H - 5, { align: 'right' })
   }
 
-  // ── Section heading ───────────────────────────────────────────────────────
+  // ── Section heading ─────────────────────────────────────────────────────────
 
   const sectionHead = (title: string, sub?: string) => {
     checkPage(16)
@@ -247,7 +250,7 @@ export async function generatePDF(
       sdc(border); doc.setLineWidth(0.2); rc(cx, cy, w, h, 'S')
     }
 
-    // ── Row 1: header ───────────────────────────────────────────────────────
+    // ── Row 1: header ─────────────────────────────────────────────────────
     const HDR_H = 20
     cell(M, y, labelW, HDR_H, [210, 215, 222])
     sf('bold', 6.5); stc(C.navy)
@@ -263,7 +266,7 @@ export async function generatePDF(
     })
     y += HDR_H
 
-    // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────
+    // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────────
     const textRow = (label: string, values: string[], minH = 12, labelBg: RGB = [232, 236, 241]) => {
       const LINE_H = 3.5  // approx mm per line at 8pt bold
 
@@ -402,7 +405,7 @@ export async function generatePDF(
     y += 6
   }
 
-  // ── Roster grid ───────────────────────────────────────────────────────────
+  // ── Roster grid ─────────────────────────────────────────────────────────────
 
   const drawRosterHalf = (slots: ShiftSlot[], label: string, xOff: number): number => {
     const colW = (W - M*2) / 2 - 2
@@ -614,7 +617,7 @@ export async function generatePDF(
     }
     y += 4
 
-    // ── Active table ────────────────────────────────────────────────────────
+    // ── Active table ──────────────────────────────────────────────────────
     type RowMeta = { kind: 'row'; status: 'NEW' | 'AMENDED' | 'UNCHANGED' } | { kind: 'changes' }
     const body: any[][] = []
     const meta: RowMeta[] = []
@@ -675,7 +678,7 @@ export async function generatePDF(
     })
     y = getAutoY() + 8
 
-    // ── Removed since baseline ──────────────────────────────────────────────
+    // ── Removed since baseline ─────────────────────────────────────────────
     checkPage(24)
     const removedTitle = esr.baselineDate
       ? `REMOVED SINCE ${formatDisplayDate(esr.baselineDate).toUpperCase()}`
@@ -728,13 +731,13 @@ export async function generatePDF(
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────
   // BUILD DOCUMENT
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────
 
   y = drawCoverHeader()
 
-  // ── 0. Roster ─────────────────────────────────────────────────────────────
+  // ── 0. Roster ──────────────────────────────────────────────────────────────
   sectionHead('SHIFT ROSTER', log.period)
   const rosterStartY = y
   const dayEnd   = drawRosterHalf(log.roster.dayShift,   'DAY SHIFT',   0)
@@ -1092,7 +1095,7 @@ export async function generatePDF(
     doc.addImage(chartImages.topLocations, 'JPEG', M, y, chartW, locH)
     y += locH + 8
 
-    // ── Page 2: Safety & Operational Analysis ─────────────────────────────
+    // ── Page 2: Safety & Operational Analysis ─────────────────────────────────
     newPage()
     sectionHead('SAFETY & OPERATIONAL ANALYSIS', 'Timing patterns · Efficiency · Safety-critical evolution')
 
@@ -1251,7 +1254,125 @@ export async function generatePDF(
     y = getAutoY() + 6
   }
 
-  // ── Add footers to all pages ──────────────────────────────────────────────
+  // ── 9. Out of Use Infrastructure Register (always last) ──────────────────
+  // A standing register owned by maintenance (edited at /out-of-use), read as
+  // it stands at build time. Control add nothing here. Omitted only when there
+  // is no database AND nothing in the local fallback — an empty live register
+  // still prints, so the reader knows it was checked and is empty.
+  if (outOfUse && (outOfUse.source === 'cloud' || outOfUse.items.length > 0)) {
+    newPage()
+    sectionHead('OUT OF USE INFRASTRUCTURE REGISTER', 'Maintained by maintenance · as at log build')
+
+    sf('normal', 7); stc(C.darkGray)
+    const introBits: string[] = []
+    introBits.push(outOfUse.items.length === 0
+      ? 'The register is empty.'
+      : `${outOfUse.items.length} item${outOfUse.items.length === 1 ? '' : 's'} on the register.`)
+    if (outOfUse.lastUpdated) introBits.push(`Last change ${fmtOouStamp(outOfUse.lastUpdated)}.`)
+    if (outOfUse.source === 'local') introBits.push('Read from this browser only (no database configured).')
+    tx(introBits.join('  '), M, y)
+    y += 4
+    sf('italic', 6.5); stc(C.midGray)
+    tx('Entered and kept current by maintenance via the Out of Use Register page; control transcribe nothing. Queries on an entry go to the named owner.', M, y)
+    y += 6
+
+    if (outOfUse.error) {
+      sf('italic', 7.5); stc(C.red)
+      tx(doc.splitTextToSize(`The register could not be read at build time: ${outOfUse.error}`, W - M*2)[0], M, y)
+      y += 8
+    }
+
+    const oouTableStyles = {
+      margin: { left: M, right: M, top: 22 },
+      theme: 'grid' as const,
+      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold' as const, cellPadding: 1.8 },
+      bodyStyles: { textColor: C.black, fontSize: 6.8, cellPadding: 1.8, lineColor: C.lightGray, lineWidth: 0.1, valign: 'top' as const },
+      didDrawPage: () => { drawCompactHeader() },
+    }
+
+    // Sub-row text under an asset: the narrative fields the spreadsheet kept
+    // on their own lines (Detail / Owner / Repair timescale).
+    const narrative = (it: OouItem, keys: Array<keyof OouItem>, labels: Record<string, string>): string =>
+      keys.filter(k => (it[k] as string)?.trim())
+          .map(k => `${labels[k as string]}: ${(it[k] as string).trim()}`)
+          .join('\n')
+
+    const drawOouSection = (section: OouSection) => {
+      const spec  = OOU_SECTION_SPECS[section]
+      const items = outOfUse.items.filter(i => i.section === section)
+
+      checkPage(24)
+      sfc(C.offWhite); rc(M, y, W - M*2, 7)
+      sdc(C.lightGray); rc(M, y, W - M*2, 7, 'S')
+      sf('bold', 7.5); stc(C.navy); tx(spec.pdfTitle, M + 2, y + 4.8)
+      sf('normal', 7); stc(C.midGray)
+      tx(`${items.length} item${items.length !== 1 ? 's' : ''}`, W - M - 2, y + 4.8, { align: 'right' })
+      y += 9
+
+      if (items.length === 0) {
+        sf('italic', 7); stc(C.midGray)
+        tx('None.', M + 2, y)
+        y += 7
+        return
+      }
+
+      const isUps = section === 'UPS'
+      const head  = isUps
+        ? [['UPS / Site', 'Plan for Rectification', 'Impact on Failure']]
+        : [['Infrastructure Item and Location', 'ELR', 'Restriction and Impact', 'OOU Since', 'FMS / CCIL Ref']]
+
+      // Each asset becomes a main row plus, when there is any, one spanning
+      // narrative row — mirrors the old spreadsheet layout.
+      const body: any[] = []
+      const narrativeRows = new Set<number>()
+      for (const it of items) {
+        const d = daysSince(it.since)
+        if (isUps) {
+          body.push([it.item, it.plan || '—', it.impact || '—'])
+        } else {
+          body.push([
+            it.item,
+            it.elr || '—',
+            it.restriction || '—',
+            it.since ? `${fmtSince(it.since)}${d !== null ? `\n(${d} d)` : ''}` : '—',
+            it.ref || '—',
+          ])
+        }
+        const note = isUps
+          ? narrative(it, ['owner'], { owner: 'Owner' })
+          : narrative(it, ['detail', 'owner', 'plan'], { detail: 'Detail', owner: 'Owner', plan: 'Repair timescale' })
+        const stamp = `Updated ${fmtOouStamp(it.updatedAt)}${it.updatedBy ? ` by ${it.updatedBy}` : ''}`
+        narrativeRows.add(body.length)
+        body.push([{ content: note ? `${note}\n${stamp}` : stamp, colSpan: head[0].length }])
+      }
+
+      autoTable(doc, {
+        ...oouTableStyles,
+        startY: y,
+        head,
+        body,
+        columnStyles: isUps
+          ? { 0: { cellWidth: 38, fontStyle: 'bold' as const }, 1: { cellWidth: 'auto' as const }, 2: { cellWidth: 62 } }
+          : { 0: { cellWidth: 44, fontStyle: 'bold' as const }, 1: { cellWidth: 13 }, 2: { cellWidth: 'auto' as const }, 3: { cellWidth: 19 }, 4: { cellWidth: 24 } },
+        didParseCell: (data: any) => {
+          if (data.section === 'body' && narrativeRows.has(data.row.index)) {
+            data.cell.styles.fontSize = 6.2
+            data.cell.styles.fontStyle = 'normal'
+            data.cell.styles.textColor = C.darkGray
+            data.cell.styles.fillColor = [247, 248, 251]
+            data.cell.styles.cellPadding = { top: 1.2, bottom: 1.6, left: 3, right: 2 }
+          }
+        },
+      })
+      y = getAutoY() + 7
+    }
+
+    drawOouSection('SHORT_TERM')
+    drawOouSection('LONG_TERM')
+    drawOouSection('UPS')
+  }
+
+  // ── Add footers to all pages ───────────────────────────────────────────────
 
   const total = doc.getNumberOfPages()
   for (let p = 1; p <= total; p++) {
@@ -1260,13 +1381,13 @@ export async function generatePDF(
     if (testMode) drawTestWatermark()
   }
 
-  // ── Save ──────────────────────────────────────────────────────────────────
+  // ── Save ───────────────────────────────────────────────────────────────────
 
   const dateStr = log.date ? log.date.replace(/-/g, '') : 'unknown'
   doc.save(`EMCC_Daily_Report_${dateStr}${testMode ? '_TEST' : ''}.pdf`)
 }
 
-// ─── Utility ──────────────────────────────────────────────────────────────────
+// ─── Utility ─────────────────────────────────────────────────────────────────
 
 function formatDisplayDate(iso: string): string {
   const [yyyy, mm, dd] = iso.split('-')
