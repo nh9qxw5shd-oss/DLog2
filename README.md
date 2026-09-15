@@ -31,6 +31,7 @@ to Supabase only when those integrations are configured.
 - Categorised incident tables: SPADs, TPWS, Bridge Strikes, Near Misses, Irregular Working, Level Crossings, Fires, Crime, HABD/WILD, Passenger Injuries, Infrastructure, Traction
 - Disruption impact ranked table
 - Full CCIL log appendix (verbatim)
+- Out of Use Infrastructure Register — always the final section; read from the maintenance-owned register at build (see below)
 
 ---
 
@@ -90,7 +91,7 @@ runtime handles it with no extra work. A `netlify.toml` is included.
 
    | Variable | Enables |
    |----------|---------|
-   | `NEXT_PUBLIC_SUPABASE_URL` | Incident DB save + historical trend charts |
+   | `NEXT_PUBLIC_SUPABASE_URL` | Incident DB save, historical trend charts, Out of Use register |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (same — public anon key, secure with RLS) |
    | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_URL` | "Import roster" button |
    | `NEXT_PUBLIC_ROSTERHUB_SUPABASE_ANON_KEY` | (same) |
@@ -308,6 +309,42 @@ holds the ready-made `{new, amended, removed}` breakdown per day.
 The route caches a successful scrape in-process for 60 seconds so repeated
 "Regenerate PDF" clicks do not re-hit the NRSDB login endpoint.
 
+## Out of Use Infrastructure Register
+
+A standing register of infrastructure that is out of use (short term, long
+term) and UPS units that are offline. It is **maintenance's to keep**, not
+control's: control add nothing to it during the log build. Every PDF simply
+prints the register as it stands, as its final section.
+
+- **Page:** `/out-of-use` — a standalone page with **no navigation back into
+  DLog2**, so it can be handed to maintenance staff as a link on its own.
+  Control reach it from the **Out of Use Register** button in the main
+  header (opens in a new tab).
+- **Three parts**, matching the old spreadsheet: Short Term Infrastructure
+  Out of Use, Long Term Infrastructure Out of Use (item, ELR, restriction and
+  impact, out of use since, FMS/CCIL ref, plus Detail / Owner / Repair
+  timescale), and UPS Offline (UPS / site, plan for rectification, impact on
+  failure).
+- **Editing:** Add item, pencil to edit, bin to remove (with confirmation),
+  expand a row to see the narrative fields and to move it between parts
+  (e.g. Short Term → Long Term). Every save is live immediately. A name box
+  at the top stamps who made each change; the stamp prints in the PDF.
+- **PDF:** one table per part, each asset as a row plus a narrative sub-row,
+  days out of use alongside the date, and "Updated <when> by <who>". An empty
+  live register still prints ("None.") so the reader knows it was checked.
+  If the database cannot be read at build the PDF says so; it never blocks
+  the log.
+
+Requires Supabase: run `supabase/migrations/012_out_of_use_register.sql`.
+The register starts empty; the previous spreadsheet's rows can be keyed in
+on the page or loaded with a one-off INSERT. Without Supabase the page still
+works but is per-browser and the log cannot see it; the page and the
+Generate step both say so.
+
+There is no login on the register page, the same as the rest of the app.
+The only thing keeping maintenance out of the log workflow is that the
+register page does not link to it — treat the main DLog2 URL as need-to-know.
+
 ## Modifying the PDF
 
 Edit `lib/pdfGenerator.ts` — sections are clearly commented.
@@ -330,6 +367,7 @@ emcc-daily-log/
 │   ├── api/esr/keepalive/route.ts← pg_cron target: pull with the stored session every 5 min (server)
 │   ├── globals.css
 │   ├── layout.tsx
+│   ├── out-of-use/page.tsx ← standalone Out of Use register (maintenance-facing, no link back)
 │   └── page.tsx          ← Full app (upload → roster → review → generate)
 ├── scripts/
 │   └── nrsdb_push.py      ← pull from NRSDB on an allowed PC → POST /api/esr/ingest
@@ -338,6 +376,7 @@ emcc-daily-log/
 │   ├── ccilParser.ts      ← CCIL DOCX regex parser
 │   ├── pdfGenerator.ts    ← jsPDF report builder
 │   ├── esrClient.ts       ← browser wrapper for /api/esr/snapshot
+│   ├── outOfUse.ts        ← Out of Use register: types, section specs, Supabase CRUD + local fallback
 │   └── esr/
 │       ├── types.ts       ← shared ESR types
 │       ├── refnum.ts      ← "EM 061C.26" → base ref + revision rank
