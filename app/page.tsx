@@ -27,8 +27,9 @@ import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRSDB_FEED_URL, londonToday } from '@/lib/esrClient'
 import { useTestMode } from '@/lib/testMode'
+import { fetchOutOfUseRegister, OouRegister, ago as oouAgo } from '@/lib/outOfUse'
 
-// ─── Hydration-safe clock ─────────────────────────────────────────────────────
+// ─── Hydration-safe clock ─────────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
 
 function LiveClock() {
@@ -118,7 +119,7 @@ function StepBar({ current }: { current: number }) {
   )
 }
 
-// ─── Step 1: Upload ───────────────────────────────────────────────────────────
+// ─── Step 1: Upload ─────────────────────────────────────────────────────────────
 
 function UploadStep({ onComplete }: {
   onComplete: (data: Partial<LogState>, rawText: string) => void
@@ -274,7 +275,7 @@ const RISK_LEVEL_DOT: Record<RiskLevel, string> = {
   EXTREME: 'bg-[#C0392B]',
 }
 
-// ─── Seasonal cell display constants ─────────────────────────────────────────
+// ─── Seasonal cell display constants ───────────────────────────────────────────
 
 const STEAM_FIRE_BG: Record<SteamFireRiskLevel, string> = {
   GREEN: 'bg-[#27AE60]',
@@ -371,7 +372,7 @@ function SteamFireRiskCell({ value, isOpen, onOpen, onClose, onChange }: {
   )
 }
 
-// ─── Adhesion cell ────────────────────────────────────────────────────────────
+// ─── Adhesion cell ──────────────────────────────────────────────────────────────
 
 function AdhesionCell({ value, isOpen, onOpen, onClose, onChange }: {
   value:    AdhesionLevel
@@ -432,7 +433,7 @@ function AdhesionCell({ value, isOpen, onOpen, onClose, onChange }: {
   )
 }
 
-// ─── Weather cell with inline risk editor ────────────────────────────────────
+// ─── Weather cell with inline risk editor ────────────────────────────────────────
 
 function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
   day:      DayWeather
@@ -529,7 +530,7 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
   )
 }
 
-// ─── 5 Day Look Ahead config component ───────────────────────────────────────
+// ─── 5 Day Look Ahead config component ─────────────────────────────────────────
 
 const SEASON_MODES: SeasonMode[] = ['Standard', 'Summer', 'Autumn']
 
@@ -752,7 +753,7 @@ function FiveDaySection({ log, onChange }: {
   )
 }
 
-// ─── Step 2: Roster ───────────────────────────────────────────────────────────
+// ─── Step 2: Roster ─────────────────────────────────────────────────────────────
 
 function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }: {
   log:          LogState
@@ -1053,7 +1054,7 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
   )
 }
 
-// ─── Step 3: Review ───────────────────────────────────────────────────────────
+// ─── Step 3: Review ─────────────────────────────────────────────────────────────
 
 const CAT_ICON_MAP: Partial<Record<IncidentCategory, typeof Shield>> = {
   FATALITY: Shield, PERSON_STRUCK: Shield, SPAD: AlertTriangle,
@@ -1407,7 +1408,7 @@ function ReviewStep({ log, onUpdate, onNext, onBack }: {
   )
 }
 
-// ─── ESR data card (Generate step) ────────────────────────────────────────────
+// ─── ESR data card (Generate step) ──────────────────────────────────────────────
 // nrsdb.uk blocks logins from hosted servers, so on production the operator
 // supplies the feed from their own logged-in browser: open the feed address
 // in a tab, Ctrl+A, Ctrl+C, click Paste here. The card validates the paste
@@ -1571,7 +1572,7 @@ function EsrCard({ esr, loading, fresh, skipped, testMode, onSkip, onUnskip, onP
   )
 }
 
-// ─── Step 4: Generate ─────────────────────────────────────────────────────────
+// ─── Step 4: Generate ───────────────────────────────────────────────────────────
 
 function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
   const [generating, setGenerating] = useState(false)
@@ -1583,6 +1584,15 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
   const [esr, setEsr]               = useState<EsrSnapshotResponse | null>(null)
   const [esrLoading, setEsrLoading] = useState(true)
   const [esrSkipped, setEsrSkipped] = useState(false)
+  const [oou, setOou]               = useState<(OouRegister & { error?: string }) | null>(null)
+
+  // The Out of Use register is maintenance's, read as it stands. Fetched when
+  // the step opens and again at build so a last-minute edit is not missed.
+  useEffect(() => {
+    let cancelled = false
+    fetchOutOfUseRegister().then(r => { if (!cancelled) setOou(r) })
+    return () => { cancelled = true }
+  }, [])
 
   // Ask the server for ESR data as soon as the step opens: a live pull where
   // that works (local dev), otherwise today's stored snapshot if one exists.
@@ -1642,9 +1652,14 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
         ? esr
         : { ok: false, reason: 'skipped', message: 'The operator built this log without ESR data (no fresh NRSDB feed was supplied).' }
 
-      // 4. Build and download PDF (with charts + ESRs if available)
+      // 3c. Out of Use register — re-read at build time, read-only, never blocks.
+      setStatusMsg('Reading Out of Use register…')
+      const oouResult = await fetchOutOfUseRegister()
+      setOou(oouResult)
+
+      // 4. Build and download PDF (with charts + ESRs + register if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode })
+      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode, outOfUse: oouResult })
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
@@ -1749,6 +1764,18 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
             : <div className="flex items-center gap-2 text-amber-400"><AlertTriangle size={11} /> Emergency Speed Restrictions — needs the NRSDB feed (see above)</div>
           }
           {log.rawLogText && <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Verbatim CCIL log appendix</div>}
+          {oou && (oou.source === 'cloud' || oou.items.length > 0) && (
+            oou.error
+              ? <div className="flex items-center gap-2 text-amber-400"><AlertTriangle size={11} /> Out of Use register could not be read ({oou.error})</div>
+              : <div className="flex items-center gap-2">
+                  <Check size={11} className="text-[#27AE60]" />
+                  Out of Use Infrastructure Register
+                  <span className="text-[#7A8BA8]">
+                    ({oou.items.length} item{oou.items.length === 1 ? '' : 's'}{oou.lastUpdated ? ` · last change ${oouAgo(oou.lastUpdated)}` : ''}{oou.source === 'local' ? ' · this browser only' : ''})
+                  </span>
+                  <a href="/out-of-use" target="_blank" rel="noopener noreferrer" className="text-[#4A6FA5] hover:text-white underline underline-offset-2">open</a>
+                </div>
+          )}
           {isSupabaseConfigured() && (
             testMode
               ? <div className="flex items-center gap-2 text-amber-400"><FlaskConical size={11} /> Database save SKIPPED (Test Mode)</div>
@@ -1916,6 +1943,10 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <a href="/out-of-use" target="_blank" rel="noopener noreferrer" title="Out of Use Infrastructure Register — maintained by maintenance, printed at the end of every log. Opens in a new tab; the register page has no way back here."
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-[rgba(74,111,165,0.35)] text-[#7A8BA8] hover:text-white hover:border-[#4A6FA5] transition-colors font-mono">
+              <ExternalLink size={11} /> Out of Use Register
+            </a>
             <a href="/settings" className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
             <TestModeToggle on={testMode} onChange={setTestMode} />
             <span className={cn('pulse-dot w-2 h-2 rounded-full inline-block', testMode ? 'bg-amber-400' : 'bg-[#27AE60]')} />
