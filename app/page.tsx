@@ -27,7 +27,7 @@ import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRSDB_FEED_URL, londonToday } from '@/lib/esrClient'
 import { useTestMode } from '@/lib/testMode'
-import { fetchOutOfUseRegister, OouRegister, ago as oouAgo } from '@/lib/outOfUse'
+import { fetchOutOfUseRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -1771,7 +1771,9 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
                   <Check size={11} className="text-[#27AE60]" />
                   Out of Use Infrastructure Register
                   <span className="text-[#7A8BA8]">
-                    ({oou.items.length} item{oou.items.length === 1 ? '' : 's'}{oou.lastUpdated ? ` · last change ${oouAgo(oou.lastUpdated)}` : ''}{oou.source === 'local' ? ' · this browser only' : ''})
+                    ({oou.items.length} item{oou.items.length === 1 ? '' : 's'}
+                    {(() => { const c = ragCounts(oou.items); const bits = [c.RED && `${c.RED} red`, c.AMBER && `${c.AMBER} amber`, c.GREEN && `${c.GREEN} green`, c.UNRATED && `${c.UNRATED} not assessed`].filter(Boolean); return bits.length ? ` · ${bits.join(' · ')}` : '' })()}
+                    {oou.lastUpdated ? ` · last change ${oouAgo(oou.lastUpdated)}` : ''}{oou.source === 'local' ? ' · this browser only' : ''})
                   </span>
                   <a href="/out-of-use" target="_blank" rel="noopener noreferrer" className="text-[#4A6FA5] hover:text-white underline underline-offset-2">open</a>
                 </div>
