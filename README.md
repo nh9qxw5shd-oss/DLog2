@@ -311,35 +311,40 @@ The route caches a successful scrape in-process for 60 seconds so repeated
 
 ## Out of Use Infrastructure Register
 
-A standing register of infrastructure that is out of use (short term, long
-term) and UPS units that are offline. It is **maintenance's to keep**, not
-control's: control add nothing to it during the log build. Every PDF simply
-prints the register as it stands, as its final section.
+A standing register of infrastructure that is out of use and UPS units that
+are offline. It is **maintenance's to keep**, not control's: control add
+nothing to it during the log build. Every PDF simply prints the register as it
+stands, as its final section.
 
 - **Page:** `/out-of-use` — a standalone page with **no navigation back into
   DLog2**, so it can be handed to maintenance staff as a link on its own.
   Control reach it from the **Out of Use Register** button in the main
   header (opens in a new tab).
-- **Three parts**, matching the old spreadsheet: Short Term Infrastructure
-  Out of Use, Long Term Infrastructure Out of Use (item, ELR, restriction and
-  impact, out of use since, FMS/CCIL ref, plus Detail / Owner / Repair
-  timescale), and UPS Offline (UPS / site, plan for rectification, impact on
-  failure).
+- **Two parts.** *Infrastructure Out of Use* — one table for every asset
+  regardless of expected duration. *UPS Offline* — UPS / site, plan for
+  rectification, impact on failure.
+- **Two authors per infrastructure entry.** Maintenance record the item and
+  location, ELR, the issue and restrictions imposed, out-of-use date,
+  FMS/CCIL ref, owner, and repair requirements and timescale. **Ops** record
+  the operational impact and rate it **RAG**: Red = significant impact
+  expected, Amber = minimal, Green = none. An entry ops have not rated shows
+  as *Not assessed*.
+- **Order.** The RAG sets the order on the page and in the PDF: Red, Amber,
+  Not assessed, Green, then oldest out of use first.
 - **Editing:** Add item, pencil to edit, bin to remove (with confirmation),
-  expand a row to see the narrative fields and to move it between parts
-  (e.g. Short Term → Long Term). Every save is live immediately. A name box
-  at the top stamps who made each change; the stamp prints in the PDF.
-- **PDF:** one table per part, each asset as a row plus a narrative sub-row,
-  days out of use alongside the date, and "Updated <when> by <who>". An empty
-  live register still prints ("None.") so the reader knows it was checked.
-  If the database cannot be read at build the PDF says so; it never blocks
-  the log.
+  a dropdown to move an entry between the two parts. Every save is live
+  immediately. A name box at the top stamps who made each change; the stamp
+  prints in the PDF.
+- **PDF:** the infrastructure table has a coloured RAG cell per row and a
+  narrative sub-row (operational impact, repair requirements and timescale,
+  updated by). An empty live register still prints ("None.") so the reader
+  knows it was checked. If the database cannot be read at build the PDF
+  says so; it never blocks the log.
 
-Requires Supabase: run `supabase/migrations/012_out_of_use_register.sql`.
-The register starts empty; the previous spreadsheet's rows can be keyed in
-on the page or loaded with a one-off INSERT. Without Supabase the page still
-works but is per-browser and the log cannot see it; the page and the
-Generate step both say so.
+Requires Supabase: run `supabase/migrations/012_out_of_use_register.sql`
+then `013_out_of_use_rag.sql`. Without Supabase the page still works but is
+per-browser and the log cannot see it; the page and the Generate step both
+say so.
 
 There is no login on the register page, the same as the rest of the app.
 The only thing keeping maintenance out of the log workflow is that the

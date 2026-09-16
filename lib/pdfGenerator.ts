@@ -10,7 +10,7 @@ import type { CategorySettings } from './categorySettings'
 import type { EsrSnapshotResponse, EsrRow, EsrFieldChange } from './esr/types'
 import { describeChanges } from './esr/diff'
 import type { OouRegister, OouItem, OouSection } from './outOfUse'
-import { OOU_SECTION_SPECS, fmtSince, daysSince, fmtStamp as fmtOouStamp } from './outOfUse'
+import { OOU_SECTION_SPECS, OOU_RAGS, OOU_RAG_SPECS, OOU_UNRATED, ragCounts, fmtSince, daysSince, fmtStamp as fmtOouStamp } from './outOfUse'
 
 export type { ChartImages }
 
@@ -1273,8 +1273,9 @@ export async function generatePDF(
     tx(introBits.join('  '), M, y)
     y += 4
     sf('italic', 6.5); stc(C.midGray)
-    tx('Entered and kept current by maintenance via the Out of Use Register page; control transcribe nothing. Queries on an entry go to the named owner.', M, y)
-    y += 6
+    const oouNote = doc.splitTextToSize('Maintenance keep the assets, issues and repair plans current; ops rate the operational impact (RAG), which sets the order. Control transcribe nothing. Queries on an entry go to the named owner.', W - M*2)
+    tx(oouNote, M, y)
+    y += 3.2 * oouNote.length + 3
 
     if (outOfUse.error) {
       sf('italic', 7.5); stc(C.red)
@@ -1285,29 +1286,49 @@ export async function generatePDF(
     const oouTableStyles = {
       margin: { left: M, right: M, top: 22 },
       theme: 'grid' as const,
-      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 7, fontStyle: 'bold' as const, cellPadding: 1.8 },
-      bodyStyles: { textColor: C.black, fontSize: 6.8, cellPadding: 1.8, lineColor: C.lightGray, lineWidth: 0.1, valign: 'top' as const },
+      headStyles: { fillColor: C.blue, textColor: C.white, fontSize: 6.8, fontStyle: 'bold' as const, cellPadding: 1.6 },
+      bodyStyles: { textColor: C.black, fontSize: 6.6, cellPadding: 1.6, lineColor: C.lightGray, lineWidth: 0.1, valign: 'top' as const },
       didDrawPage: () => { drawCompactHeader() },
     }
 
-    // Sub-row text under an asset: the narrative fields the spreadsheet kept
-    // on their own lines (Detail / Owner / Repair timescale).
-    const narrative = (it: OouItem, keys: Array<keyof OouItem>, labels: Record<string, string>): string =>
-      keys.filter(k => (it[k] as string)?.trim())
-          .map(k => `${labels[k as string]}: ${(it[k] as string).trim()}`)
-          .join('\n')
+    // Narrative lines under an asset: label + text for each non-empty field.
+    const narrative = (pairs: Array<[string, string]>): string =>
+      pairs.filter(([, v]) => v?.trim()).map(([k, v]) => `${k}: ${v.trim()}`).join('\n')
 
-    const drawOouSection = (section: OouSection) => {
-      const spec  = OOU_SECTION_SPECS[section]
-      const items = outOfUse.items.filter(i => i.section === section)
-
+    const oouSubHead = (title: string, right: string) => {
       checkPage(24)
       sfc(C.offWhite); rc(M, y, W - M*2, 7)
       sdc(C.lightGray); rc(M, y, W - M*2, 7, 'S')
-      sf('bold', 7.5); stc(C.navy); tx(spec.pdfTitle, M + 2, y + 4.8)
+      sf('bold', 7.5); stc(C.navy); tx(title, M + 2, y + 4.8)
       sf('normal', 7); stc(C.midGray)
-      tx(`${items.length} item${items.length !== 1 ? 's' : ''}`, W - M - 2, y + 4.8, { align: 'right' })
+      tx(right, W - M - 2, y + 4.8, { align: 'right' })
       y += 9
+    }
+
+    // ── Infrastructure: one table, ordered by ops RAG (RED → AMBER → unrated → GREEN)
+    const drawInfra = () => {
+      const spec  = OOU_SECTION_SPECS.INFRA
+      const items = outOfUse.items.filter(i => i.section === 'INFRA')   // already sorted by lib
+      const counts = ragCounts(items)
+      const summary = items.length === 0 ? '0 items'
+        : [`${items.length} item${items.length !== 1 ? 's' : ''}`,
+           counts.RED ? `${counts.RED} red` : null, counts.AMBER ? `${counts.AMBER} amber` : null,
+           counts.GREEN ? `${counts.GREEN} green` : null, counts.UNRATED ? `${counts.UNRATED} not assessed` : null,
+          ].filter(Boolean).join(' · ')
+      oouSubHead(spec.pdfTitle, summary)
+
+      // RAG legend
+      let lx = M + 2
+      const legend: Array<[string, RGB]> = [
+        ...OOU_RAGS.map(r => [`${OOU_RAG_SPECS[r].label} — ${OOU_RAG_SPECS[r].meaning.replace(' expected', '')}`, OOU_RAG_SPECS[r].rgb] as [string, RGB]),
+        ['Not assessed — ops to rate', OOU_UNRATED.rgb],
+      ]
+      for (const [label, bg] of legend) {
+        sfc(bg); rc(lx, y - 2.4, 4, 3, 'F')
+        sf('normal', 6.2); stc(C.darkGray); tx(label, lx + 5.2, y)
+        lx += 5.2 + doc.getTextWidth(label) + 6
+      }
+      y += 4
 
       if (items.length === 0) {
         sf('italic', 7); stc(C.midGray)
@@ -1316,31 +1337,26 @@ export async function generatePDF(
         return
       }
 
-      const isUps = section === 'UPS'
-      const head  = isUps
-        ? [['UPS / Site', 'Plan for Rectification', 'Impact on Failure']]
-        : [['Infrastructure Item and Location', 'ELR', 'Restriction and Impact', 'OOU Since', 'FMS / CCIL Ref']]
-
-      // Each asset becomes a main row plus, when there is any, one spanning
-      // narrative row — mirrors the old spreadsheet layout.
+      const head = [['RAG', 'Infrastructure Item and Location', 'ELR', 'Issue and Restrictions Imposed', 'OOU Since', 'FMS / CCIL Ref', 'Owner']]
       const body: any[] = []
+      const rowRag = new Map<number, OouItem['rag']>()   // main-row index → rag
       const narrativeRows = new Set<number>()
       for (const it of items) {
         const d = daysSince(it.since)
-        if (isUps) {
-          body.push([it.item, it.plan || '—', it.impact || '—'])
-        } else {
-          body.push([
-            it.item,
-            it.elr || '—',
-            it.restriction || '—',
-            it.since ? `${fmtSince(it.since)}${d !== null ? `\n(${d} d)` : ''}` : '—',
-            it.ref || '—',
-          ])
-        }
-        const note = isUps
-          ? narrative(it, ['owner'], { owner: 'Owner' })
-          : narrative(it, ['detail', 'owner', 'plan'], { detail: 'Detail', owner: 'Owner', plan: 'Repair timescale' })
+        rowRag.set(body.length, it.rag)
+        body.push([
+          it.rag ? OOU_RAG_SPECS[it.rag].label.toUpperCase() : 'N/A',
+          it.item,
+          it.elr || '—',
+          it.detail || '—',
+          it.since ? `${fmtSince(it.since)}${d !== null ? `\n(${d} d)` : ''}` : '—',
+          it.ref || '—',
+          it.owner || '—',
+        ])
+        const note = narrative([
+          ['Operational impact (Ops)', it.opsImpact || (it.rag ? '' : 'Not yet assessed by ops.')],
+          ['Repair requirements and timescale', it.plan],
+        ])
         const stamp = `Updated ${fmtOouStamp(it.updatedAt)}${it.updatedBy ? ` by ${it.updatedBy}` : ''}`
         narrativeRows.add(body.length)
         body.push([{ content: note ? `${note}\n${stamp}` : stamp, colSpan: head[0].length }])
@@ -1351,9 +1367,69 @@ export async function generatePDF(
         startY: y,
         head,
         body,
-        columnStyles: isUps
-          ? { 0: { cellWidth: 38, fontStyle: 'bold' as const }, 1: { cellWidth: 'auto' as const }, 2: { cellWidth: 62 } }
-          : { 0: { cellWidth: 44, fontStyle: 'bold' as const }, 1: { cellWidth: 13 }, 2: { cellWidth: 'auto' as const }, 3: { cellWidth: 19 }, 4: { cellWidth: 24 } },
+        columnStyles: {
+          0: { cellWidth: 13, halign: 'center' as const, fontStyle: 'bold' as const },
+          1: { cellWidth: 36, fontStyle: 'bold' as const },
+          2: { cellWidth: 11 },
+          3: { cellWidth: 'auto' as const },
+          4: { cellWidth: 17 },
+          5: { cellWidth: 20 },
+          6: { cellWidth: 19 },
+        },
+        didParseCell: (data: any) => {
+          if (data.section !== 'body') return
+          if (narrativeRows.has(data.row.index)) {
+            data.cell.styles.fontSize = 6.2
+            data.cell.styles.fontStyle = 'normal'
+            data.cell.styles.textColor = C.darkGray
+            data.cell.styles.fillColor = [247, 248, 251]
+            data.cell.styles.cellPadding = { top: 1.2, bottom: 1.6, left: 3, right: 2 }
+            data.cell.styles.halign = 'left'
+            return
+          }
+          if (data.column.index === 0) {
+            const rag = rowRag.get(data.row.index) ?? null
+            const s = rag ? OOU_RAG_SPECS[rag] : OOU_UNRATED
+            data.cell.styles.fillColor = s.rgb
+            data.cell.styles.textColor = rag === 'AMBER' ? C.navy : C.white
+            data.cell.styles.fontSize = rag ? 6.4 : 5.6
+            data.cell.styles.valign = 'middle'
+          }
+        },
+      })
+      y = getAutoY() + 7
+    }
+
+    // ── UPS: unchanged layout
+    const drawUps = () => {
+      const spec  = OOU_SECTION_SPECS.UPS
+      const items = outOfUse.items.filter(i => i.section === 'UPS')
+      oouSubHead(spec.pdfTitle, `${items.length} item${items.length !== 1 ? 's' : ''}`)
+
+      if (items.length === 0) {
+        sf('italic', 7); stc(C.midGray)
+        tx('None.', M + 2, y)
+        y += 7
+        return
+      }
+
+      const head = [['UPS / Site', 'Plan for Rectification', 'Impact on Failure']]
+      const body: any[] = []
+      const narrativeRows = new Set<number>()
+      for (const it of items) {
+        body.push([it.item, it.plan || '—', it.impact || '—'])
+        const note = narrative([['Owner', it.owner]])
+        const stamp = `Updated ${fmtOouStamp(it.updatedAt)}${it.updatedBy ? ` by ${it.updatedBy}` : ''}`
+        narrativeRows.add(body.length)
+        body.push([{ content: note ? `${note}\n${stamp}` : stamp, colSpan: head[0].length }])
+      }
+
+      autoTable(doc, {
+        ...oouTableStyles,
+        startY: y,
+        head,
+        body,
+        columnStyles: { 0: { cellWidth: 38, fontStyle: 'bold' as const }, 1: { cellWidth: 'auto' as const }, 2: { cellWidth: 62 } },
         didParseCell: (data: any) => {
           if (data.section === 'body' && narrativeRows.has(data.row.index)) {
             data.cell.styles.fontSize = 6.2
@@ -1361,15 +1437,15 @@ export async function generatePDF(
             data.cell.styles.textColor = C.darkGray
             data.cell.styles.fillColor = [247, 248, 251]
             data.cell.styles.cellPadding = { top: 1.2, bottom: 1.6, left: 3, right: 2 }
+            data.cell.styles.halign = 'left'
           }
         },
       })
       y = getAutoY() + 7
     }
 
-    drawOouSection('SHORT_TERM')
-    drawOouSection('LONG_TERM')
-    drawOouSection('UPS')
+    drawInfra()
+    drawUps()
   }
 
   // ── Add footers to all pages ───────────────────────────────────────────────
