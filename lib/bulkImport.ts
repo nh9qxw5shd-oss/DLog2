@@ -2,7 +2,7 @@ import { CCIL_LABEL_MAP, normalizeForLookup } from './ccilParser'
 import {
   Incident, IncidentCategory, IncidentEvent, LogState, Severity,
   DEFAULT_ROSTER,
-  makeEmptyFiveDayWeather,
+  makeEmptyLookAheadWeather,
   makeEmptyLookAheadNotes,
   makeEmptySeasonalData,
 } from './types'
@@ -367,7 +367,7 @@ export function makeHistoricLogState(
     createdBy,
     incidents:      slice.incidents,
     roster:         DEFAULT_ROSTER,
-    fiveDayWeather: makeEmptyFiveDayWeather(),
+    lookAheadWeather: makeEmptyLookAheadWeather(),
     lookAheadNotes: makeEmptyLookAheadNotes(),
     ...makeEmptySeasonalData(),
     status:         'reviewed',

@@ -5,14 +5,15 @@ import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
   Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin, FlaskConical,
-  ExternalLink, ClipboardPaste, Ban,
+  ExternalLink, ClipboardPaste, Ban, CloudSun,
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
   DEFAULT_ROSTER, CATEGORY_CONFIG, IncidentCategory,
   HazardLevel, RiskLevel, WeatherRisk, DayWeather,
-  WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveUpcomingDays,
-  makeEmptyFiveDayWeather, makeEmptyLookAheadNotes,
+  WEATHER_RISK_OPTIONS, deriveWeatherLevel, deriveUpcomingDays, deriveUpcomingDates,
+  makeEmptyLookAheadWeather, makeEmptyLookAheadNotes, normaliseLookAheadWeather, padTo7,
+  LOOK_AHEAD_DAYS, FORECAST_AREAS, ForecastAreaKey, ForecastDocument, todayIsoLocal,
   SeasonMode, SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
   makeEmptySeasonalData,
 } from '@/lib/types'
@@ -21,7 +22,12 @@ import {
   voteLogDate, londonNow, currentPeriodStartDate,
 } from '@/lib/ccilParser'
 import { generatePDF } from '@/lib/pdfGenerator'
-import { isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations, SaveBlockedError } from '@/lib/supabaseClient'
+import {
+  isSupabaseConfigured, upsertReportData, fetchHistoricalData, annotateWithContinuations, SaveBlockedError,
+  storeForecast, fetchLatestForecast, StoredForecast, LatestForecastSummary,
+} from '@/lib/supabaseClient'
+import { parseForecastPdf } from '@/lib/weather/forecastParser'
+import { applyForecast, describeIssue, sha256Hex } from '@/lib/weather/applyForecast'
 import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from '@/lib/rosterhub'
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
@@ -78,8 +84,10 @@ const BLANK_LOG: LogState = {
   controlCentre: 'East Midlands Control Centre (EMCC)',
   roster: DEFAULT_ROSTER,
   incidents: [],
-  fiveDayWeather: makeEmptyFiveDayWeather(),
+  lookAheadWeather: makeEmptyLookAheadWeather(),
   lookAheadNotes: makeEmptyLookAheadNotes(),
+  forecast: null,
+  forecastFileName: null,
   ...makeEmptySeasonalData(),
   status: 'empty',
 }
@@ -119,16 +127,84 @@ function StepBar({ current }: { current: number }) {
   )
 }
 
+// ─── Forecast PDF import (shared by the Upload step and the look-ahead) ───────
+
+interface ForecastImportResult {
+  forecast:   ForecastDocument
+  fileName:   string
+  stored:     StoredForecast | null
+  storeError: string | null
+}
+
+async function importForecastFile(f: File, opts: { testMode: boolean }): Promise<ForecastImportResult> {
+  const buf = await f.arrayBuffer()
+  const forecast = await parseForecastPdf(buf)
+  if (!forecast.areas.length) {
+    throw new Error(`"${f.name}" does not look like a Route 7 Day Forecast — no hazard tables were found.`)
+  }
+  let stored: StoredForecast | null = null
+  let storeError: string | null = null
+  if (isSupabaseConfigured() && !opts.testMode) {
+    try {
+      const hash = await sha256Hex(buf)
+      stored = await storeForecast(forecast, { fileName: f.name, hash })
+    } catch (e: any) {
+      storeError = e?.message || 'Forecast could not be saved to the database'
+    }
+  }
+  return { forecast, fileName: f.name, stored, storeError }
+}
+
+function ForecastCard({ forecast, fileName, notes, stored, storeError, compact }: {
+  forecast:   ForecastDocument
+  fileName?:  string | null
+  notes?:     string[]
+  stored?:    StoredForecast | null
+  storeError?: string | null
+  compact?:   boolean
+}) {
+  const stale = forecast.validFromDate && forecast.validFromDate !== todayIsoLocal()
+  const problems = [...(forecast.warnings || []), ...(notes || [])]
+  return (
+    <div className={cn('rounded border', stale ? 'border-[rgba(243,156,18,0.5)] bg-[rgba(243,156,18,0.06)]' : 'border-[rgba(39,174,96,0.4)] bg-[rgba(39,174,96,0.06)]', compact ? 'p-2' : 'p-3')}>
+      <div className="flex items-start gap-2">
+        <CloudSun size={16} className={cn('mt-0.5 shrink-0', stale ? 'text-[#F39C12]' : 'text-[#27AE60]')} />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="text-white text-sm font-medium truncate">{forecast.title || 'Route 7 Day Forecast'}{fileName ? <span className="text-[#7A8BA8] font-normal"> · {fileName}</span> : null}</p>
+          <p className="text-[#7A8BA8] text-xs">
+            {describeIssue(forecast)}{forecast.validFromDate ? ` · valid from ${forecast.validFromDate}` : ''}
+            {' · '}{forecast.areas.length} areas × {forecast.areas[0]?.days.length ?? 0} days
+          </p>
+          {stale && <p className="text-[#F39C12] text-xs">This forecast is not today&apos;s issue — days were matched by date; check the grid.</p>}
+          {stored && !storeError && (
+            <p className="text-[#7A8BA8] text-[11px]">{stored.alreadyStored ? 'Already in the shared forecast store (refreshed).' : 'Saved to the shared forecast store for the 09:00 call and 05:30 message.'}</p>
+          )}
+          {storeError && <p className="text-red-400 text-xs">Not saved to the database: {storeError}</p>}
+          {problems.length > 0 && (
+            <ul className="text-[11px] text-[#F39C12] list-disc pl-4 space-y-0.5">
+              {problems.slice(0, 8).map((w, i) => <li key={i}>{w}</li>)}
+              {problems.length > 8 && <li>… {problems.length - 8} more</li>}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Step 1: Upload ─────────────────────────────────────────────────────────────
 
-function UploadStep({ onComplete }: {
+function UploadStep({ onComplete, testMode }: {
   onComplete: (data: Partial<LogState>, rawText: string) => void
+  testMode:   boolean
 }) {
   const [dragging, setDragging] = useState(false)
   const [file, setFile]         = useState<File | null>(null)
   const [parsing, setParsing]   = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError]       = useState('')
+  const [parsed, setParsed]     = useState<{ data: Partial<LogState>; rawText: string } | null>(null)
+  const [fcState, setFcState]   = useState<{ status: 'idle' | 'parsing' | 'done' | 'error'; result?: ForecastImportResult; notes?: string[]; error?: string }>({ status: 'idle' })
   const inputRef = useRef<HTMLInputElement>(null)
 
   const htmlToTableText = useCallback((html: string): string => {
@@ -149,8 +225,8 @@ function UploadStep({ onComplete }: {
     return lines.join('\n')
   }, [])
 
-  const process = useCallback(async (f: File) => {
-    setFile(f); setError(''); setParsing(true); setProgress('Reading DOCX…')
+  const processDocx = useCallback(async (f: File) => {
+    setFile(f); setError(''); setParsing(true); setProgress('Reading DOCX…'); setParsed(null)
     try {
       const mammoth    = await import('mammoth')
       const buf        = await f.arrayBuffer()
@@ -184,58 +260,118 @@ function UploadStep({ onComplete }: {
       const period = header.period
 
       setProgress(`Done — ${incidents.length} incidents extracted`)
-      onComplete({ period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText)
+      setParsed({ data: { period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText })
     } catch (e: any) {
       setError(e.message || 'Parse failed')
-      setParsing(false)
       setProgress('')
+    } finally {
+      setParsing(false)
     }
-  }, [htmlToTableText, onComplete])
+  }, [htmlToTableText])
+
+  const processForecast = useCallback(async (f: File) => {
+    setFcState({ status: 'parsing' })
+    try {
+      const result = await importForecastFile(f, { testMode })
+      const applied = applyForecast(result.forecast, todayIsoLocal())
+      setFcState({ status: 'done', result, notes: applied.notes })
+    } catch (e: any) {
+      setFcState({ status: 'error', error: e?.message || 'Forecast parse failed' })
+    }
+  }, [testMode])
+
+  const handleFiles = useCallback((files: FileList | File[]) => {
+    const list = Array.from(files)
+    let unknown = 0
+    for (const f of list) {
+      const name = f.name.toLowerCase()
+      if (name.endsWith('.docx')) processDocx(f)
+      else if (name.endsWith('.pdf')) processForecast(f)
+      else unknown++
+    }
+    if (unknown) setError('Drop the CCIL .docx export and, optionally, the Route 7 Day Forecast .pdf. Other file types are ignored.')
+  }, [processDocx, processForecast])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false)
-    const f = e.dataTransfer.files[0]
-    if (f?.name.toLowerCase().endsWith('.docx')) process(f)
-    else setError('Please upload a .docx file (CCIL export)')
-  }, [process])
+    handleFiles(e.dataTransfer.files)
+  }, [handleFiles])
+
+  const forecastPatch = (): Partial<LogState> => {
+    if (fcState.status !== 'done' || !fcState.result) return {}
+    const applied = applyForecast(fcState.result.forecast, todayIsoLocal())
+    return { lookAheadWeather: applied.weather, forecast: fcState.result.forecast, forecastFileName: fcState.result.fileName }
+  }
+
+  const proceed = () => { if (parsed) onComplete({ ...parsed.data, ...forecastPatch() }, parsed.rawText) }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-white mb-1">Upload CCIL Log Export</h2>
-        <p className="text-sm text-[#7A8BA8]">Drop the CCIL .docx export. All processing is local — nothing leaves your browser.</p>
+        <h2 className="text-xl font-semibold text-white mb-1">Upload CCIL Log Export &amp; Route Forecast</h2>
+        <p className="text-sm text-[#7A8BA8]">Drop the CCIL .docx export and the Route 7 Day Forecast .pdf together or one at a time. Parsing is local — the forecast&apos;s figures are shared with the 09:00 call and 05:30 message once read.</p>
       </div>
 
       <div
-        className={cn('drop-zone rounded-lg p-12 text-center cursor-pointer', dragging && 'dragover')}
+        className={cn('drop-zone rounded-lg p-10 text-center cursor-pointer', dragging && 'dragover')}
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
       >
-        <input ref={inputRef} type="file" accept=".docx" className="hidden"
-          onChange={e => e.target.files?.[0] && process(e.target.files[0])} />
+        <input ref={inputRef} type="file" accept=".docx,.pdf" multiple className="hidden"
+          onChange={e => { if (e.target.files?.length) handleFiles(e.target.files); e.target.value = '' }} />
 
         {parsing ? (
           <div className="space-y-4">
             <Loader2 size={40} className="mx-auto text-[#E05206] animate-spin" />
             <p className="text-[#7A8BA8] text-sm font-mono">{progress}</p>
           </div>
-        ) : file ? (
-          <div className="space-y-2">
-            <FileText size={40} className="mx-auto text-[#27AE60]" />
-            <p className="text-white font-medium">{file.name}</p>
-            <p className="text-[#7A8BA8] text-xs">{(file.size / 1024).toFixed(1)} KB · {progress}</p>
-          </div>
         ) : (
           <div className="space-y-3">
             <Upload size={40} className="mx-auto text-[#4A6FA5]" />
-            <p className="text-white font-medium">Drop CCIL .docx here</p>
+            <p className="text-white font-medium">Drop CCIL .docx and forecast .pdf here</p>
             <p className="text-[#7A8BA8] text-sm">or click to browse</p>
-            <p className="text-xs text-[#4A5A72] font-mono">CCIL EXPORT · DOCX FORMAT ONLY</p>
+            <p className="text-xs text-[#4A5A72] font-mono">CCIL EXPORT · DOCX &nbsp;|&nbsp; ROUTE 7 DAY FORECAST · PDF</p>
           </div>
         )}
       </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className={cn('card p-3 flex items-start gap-3', parsed && 'border-[rgba(39,174,96,0.4)]')}>
+          {parsed ? <FileText size={18} className="text-[#27AE60] mt-0.5 shrink-0" /> : <FileText size={18} className="text-[#4A5A72] mt-0.5 shrink-0" />}
+          <div className="min-w-0">
+            <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">CCIL log</p>
+            {parsed && file ? (
+              <>
+                <p className="text-white text-sm truncate">{file.name}</p>
+                <p className="text-[#7A8BA8] text-xs">{(file.size / 1024).toFixed(1)} KB · {progress}</p>
+              </>
+            ) : <p className="text-[#4A5A72] text-xs">Not loaded yet — required.</p>}
+          </div>
+        </div>
+        <div className={cn('card p-3 flex items-start gap-3', fcState.status === 'done' && 'border-[rgba(39,174,96,0.4)]')}>
+          {fcState.status === 'parsing'
+            ? <Loader2 size={18} className="text-[#E05206] animate-spin mt-0.5 shrink-0" />
+            : <CloudSun size={18} className={cn('mt-0.5 shrink-0', fcState.status === 'done' ? 'text-[#27AE60]' : 'text-[#4A5A72]')} />}
+          <div className="min-w-0">
+            <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">Route 7 Day Forecast</p>
+            {fcState.status === 'done' && fcState.result ? (
+              <>
+                <p className="text-white text-sm truncate">{fcState.result.fileName}</p>
+                <p className="text-[#7A8BA8] text-xs">{describeIssue(fcState.result.forecast)}</p>
+              </>
+            ) : fcState.status === 'parsing' ? <p className="text-[#7A8BA8] text-xs">Reading forecast…</p>
+              : fcState.status === 'error' ? <p className="text-red-400 text-xs">{fcState.error}</p>
+              : <p className="text-[#4A5A72] text-xs">Optional here — can also be added on the next step.</p>}
+          </div>
+        </div>
+      </div>
+
+      {fcState.status === 'done' && fcState.result && (
+        <ForecastCard forecast={fcState.result.forecast} fileName={fcState.result.fileName} notes={fcState.notes}
+          stored={fcState.result.stored} storeError={fcState.result.storeError} />
+      )}
 
       {error && (
         <div className="flex items-start gap-3 p-4 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)]">
@@ -244,12 +380,22 @@ function UploadStep({ onComplete }: {
         </div>
       )}
 
+      {parsed && (
+        <button
+          className="w-full py-2.5 px-4 bg-[#E05206] text-white text-sm font-semibold rounded hover:bg-[#c4480a] transition-colors flex items-center justify-center gap-2"
+          onClick={proceed}
+          disabled={fcState.status === 'parsing'}
+        >
+          Continue to Roster {fcState.status !== 'done' && <span className="font-normal opacity-80">(without forecast)</span>} <ChevronRight size={14} />
+        </button>
+      )}
+
       <div className="card p-4 space-y-3">
         <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">Or start blank (manual entry)</p>
         <button
           className="w-full py-2 px-4 border border-[rgba(74,111,165,0.4)] text-[#4A6FA5] text-sm rounded hover:bg-[rgba(74,111,165,0.1)] transition-colors"
-          onClick={() => onComplete({}, '')}
-        >Start with empty log</button>
+          onClick={() => onComplete(forecastPatch(), '')}
+        >Start with empty log{fcState.status === 'done' ? ' (keeping the forecast)' : ''}</button>
       </div>
     </div>
   )
@@ -435,6 +581,10 @@ function AdhesionCell({ value, isOpen, onOpen, onClose, onChange }: {
 
 // ─── Weather cell with inline risk editor ────────────────────────────────────────
 
+function fmtTemp(n: number | null | undefined): string {
+  return n === null || n === undefined || isNaN(n) ? '–' : n.toFixed(1).replace(/\.0$/, '')
+}
+
 function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
   day:      DayWeather
   isOpen:   boolean
@@ -445,6 +595,7 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
   const level    = deriveWeatherLevel(day)
   const selected = Object.entries(day.risks) as Array<[WeatherRisk, RiskLevel]>
   const wrapRef  = useRef<HTMLDivElement>(null)
+  const temps    = day.temps
 
   useEffect(() => {
     if (!isOpen) return
@@ -462,27 +613,37 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
         onClick={onOpen}
         className={cn(
           HAZARD_BG[level], HAZARD_TEXT[level],
-          'w-full min-h-[42px] rounded px-1 py-1 text-left leading-tight',
+          'w-full min-h-[46px] rounded px-0.5 py-1 text-left leading-tight',
           'hover:ring-2 hover:ring-white transition-all',
           isOpen && 'ring-2 ring-white',
         )}
       >
         {level === 'GREEN' ? (
-          <div className="text-center text-[10px] font-medium opacity-80">—</div>
+          <div className="text-center text-[10px] font-medium opacity-80">{temps ? 'Normal' : '—'}</div>
         ) : (
           <>
             <div className="text-[10px] font-bold text-center">{level}</div>
             {selected.length > 0 && (
-              <div className="text-[8.5px] opacity-90 text-center break-words">
+              <div className="text-[8px] opacity-90 text-center break-words">
                 {selected.map(([r]) => r).join(', ')}
               </div>
             )}
           </>
         )}
+        {temps && (
+          <div className="text-[8.5px] font-mono text-center opacity-90 mt-0.5" title="Max (06-18) / Min night (18-06) · Min morning (06-11)">
+            {fmtTemp(temps.max)}° / {fmtTemp(temps.minNight)}°
+          </div>
+        )}
       </button>
 
       {isOpen && (
         <div className="absolute z-50 top-full mt-1 left-0 w-60 bg-[#0F1629] border border-[rgba(74,111,165,0.4)] rounded p-2 shadow-xl">
+          {temps && (
+            <p className="text-[10px] text-[#7A8BA8] font-mono pb-1 mb-1 border-b border-[rgba(74,111,165,0.2)]">
+              Morn {fmtTemp(temps.minMorning)}° · Max {fmtTemp(temps.max)}° · Night {fmtTemp(temps.minNight)}°
+            </p>
+          )}
           <div className="space-y-1 max-h-72 overflow-y-auto">
             {WEATHER_RISK_OPTIONS.map(risk => {
               const current = day.risks[risk]
@@ -530,26 +691,76 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
   )
 }
 
-// ─── 5 Day Look Ahead config component ─────────────────────────────────────────
+// ─── 7 Day Look Ahead config component ─────────────────────────────────────────
 
 const SEASON_MODES: SeasonMode[] = ['Standard', 'Summer', 'Autumn']
 
-function FiveDaySection({ log, onChange }: {
+function LookAheadSection({ log, onChange, testMode }: {
   log:      LogState
   onChange: (updates: Partial<LogState>) => void
+  testMode: boolean
 }) {
   type EditTarget =
-    | { kind: 'weather';   route: 'eastMidlands' | 'londonNorth'; dayIdx: number }
+    | { kind: 'weather';   area: ForecastAreaKey; dayIdx: number }
     | { kind: 'steam';     dayIdx: number }
     | { kind: 'adhesion';  row: 'eastMids' | 'lincoln';           dayIdx: number }
   const [editing, setEditing] = useState<EditTarget | null>(null)
 
-  const weather  = log.fiveDayWeather
-  const notes    = log.lookAheadNotes
+  const weather  = normaliseLookAheadWeather(log.lookAheadWeather)
+  const notes    = {
+    risks: padTo7(log.lookAheadNotes?.risks),
+    toc:   padTo7(log.lookAheadNotes?.toc),
+    foc:   padTo7(log.lookAheadNotes?.foc),
+  }
   const season   = log.seasonMode ?? 'Standard'
 
-  const [days, setDays] = useState<string[]>(['', '', '', '', ''])
-  useEffect(() => { setDays(deriveUpcomingDays()) }, [])
+  const [days, setDays] = useState<string[]>(Array.from({ length: LOOK_AHEAD_DAYS }, () => ''))
+  const [dates, setDates] = useState<string[]>(Array.from({ length: LOOK_AHEAD_DAYS }, () => ''))
+  useEffect(() => { setDays(deriveUpcomingDays()); setDates(deriveUpcomingDates()) }, [])
+
+  // Forecast import from this step (drop-in or file picker) and the option to
+  // reuse an issue somebody else already stored this morning.
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [fcBusy, setFcBusy] = useState(false)
+  const [fcError, setFcError] = useState('')
+  const [fcNotes, setFcNotes] = useState<string[]>([])
+  const [fcStored, setFcStored] = useState<StoredForecast | null>(null)
+  const [fcStoreError, setFcStoreError] = useState<string | null>(null)
+  const [latest, setLatest] = useState<LatestForecastSummary | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  useEffect(() => {
+    if (log.forecast || !isSupabaseConfigured()) return
+    let cancelled = false
+    fetchLatestForecast().then(l => { if (!cancelled && l) setLatest(l) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [log.forecast])
+
+  const applyDoc = (forecast: ForecastDocument, fileName: string | null) => {
+    const applied = applyForecast(forecast, todayIsoLocal(), weather)
+    setFcNotes(applied.notes)
+    onChange({ lookAheadWeather: applied.weather, forecast, forecastFileName: fileName })
+  }
+
+  const loadFile = async (f: File) => {
+    if (!f.name.toLowerCase().endsWith('.pdf')) { setFcError('Drop the Route 7 Day Forecast .pdf'); return }
+    setFcBusy(true); setFcError(''); setFcStored(null); setFcStoreError(null)
+    try {
+      const r = await importForecastFile(f, { testMode })
+      setFcStored(r.stored); setFcStoreError(r.storeError)
+      applyDoc(r.forecast, r.fileName)
+    } catch (e: any) {
+      setFcError(e?.message || 'Forecast parse failed')
+    } finally {
+      setFcBusy(false)
+    }
+  }
+
+  const useStored = () => {
+    if (!latest) return
+    applyDoc(latest.document, null)
+    setFcStored({ id: latest.id, issuedAt: latest.issuedAt, alreadyStored: true })
+  }
 
   const updateNote = (key: keyof typeof notes, dayIdx: number, val: string) => {
     const next = [...notes[key]]
@@ -558,51 +769,85 @@ function FiveDaySection({ log, onChange }: {
   }
 
   const toggleRisk = (
-    route: 'eastMidlands' | 'londonNorth',
+    area: ForecastAreaKey,
     dayIdx: number,
     risk: WeatherRisk,
     level: RiskLevel | null,
   ) => {
-    const routeDays = [...weather[route]]
-    const nextRisks = { ...routeDays[dayIdx].risks }
+    const areaDays = [...weather[area]]
+    const nextRisks = { ...areaDays[dayIdx].risks }
     if (level === null) delete nextRisks[risk]
     else nextRisks[risk] = level
-    routeDays[dayIdx] = { risks: nextRisks }
-    onChange({ fiveDayWeather: { ...weather, [route]: routeDays } })
+    areaDays[dayIdx] = { ...areaDays[dayIdx], risks: nextRisks }
+    onChange({ lookAheadWeather: { ...weather, [area]: areaDays } })
   }
 
   const updateSteamFire = (dayIdx: number, val: SteamFireRiskLevel) => {
-    const next = [...(log.steamFireRisk ?? Array(5).fill('GREEN'))]
+    const next = [...padTo7(log.steamFireRisk as string[] | undefined, 'GREEN')]
     next[dayIdx] = val
     onChange({ steamFireRisk: next as SteamFireRiskLevel[] })
   }
 
   const updateAdhesion = (row: 'eastMids' | 'lincoln', dayIdx: number, val: AdhesionLevel) => {
     const key = row === 'eastMids' ? 'eastMidsAdhesion' : 'lincolnAdhesion'
-    const next = [...(log[key] ?? Array(5).fill('GOOD_1_2'))]
+    const next = [...padTo7(log[key] as string[] | undefined, 'GOOD_1_2')]
     next[dayIdx] = val
     onChange({ [key]: next as AdhesionLevel[] })
   }
-
-  const weatherRowRoutes: Array<{ key: 'eastMidlands' | 'londonNorth'; label: string }> = [
-    { key: 'eastMidlands', label: 'Weather East Midlands' },
-    { key: 'londonNorth',  label: 'Weather London North'  },
-  ]
 
   const bottomTextRows: Array<{ key: 'toc' | 'foc'; label: string }> = [
     { key: 'toc', label: 'TOC Operations & Depot start up' },
     { key: 'foc', label: 'FOC Operations'                  },
   ]
 
-  const steamFireRisk    = log.steamFireRisk    ?? Array(5).fill('GREEN')
-  const eastMidsAdhesion = log.eastMidsAdhesion ?? Array(5).fill('GOOD_1_2')
-  const lincolnAdhesion  = log.lincolnAdhesion  ?? Array(5).fill('GOOD_1_2')
+  const steamFireRisk    = padTo7(log.steamFireRisk    as string[] | undefined, 'GREEN')
+  const eastMidsAdhesion = padTo7(log.eastMidsAdhesion as string[] | undefined, 'GOOD_1_2')
+  const lincolnAdhesion  = padTo7(log.lincolnAdhesion  as string[] | undefined, 'GOOD_1_2')
+
+  const labelCell = 'px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]'
 
   return (
-    <div className="card p-4 space-y-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">5 Day Look Ahead</p>
-        <p className="text-[10px] text-[#4A5A72]">Click a weather cell to pick risks &amp; severity · text cells are free-form (default Nil)</p>
+    <div
+      className={cn('card p-4 space-y-3', dragging && 'ring-2 ring-[#E05206]')}
+      onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) loadFile(f) }}
+    >
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">7 Day Look Ahead</p>
+        <p className="text-[10px] text-[#4A5A72]">Weather cells are filled from the Route 7 Day Forecast and stay editable · text cells are free-form (default Nil)</p>
+      </div>
+
+      {/* Forecast provenance / import */}
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="flex-1 min-w-[16rem]">
+          {log.forecast ? (
+            <ForecastCard forecast={log.forecast} fileName={log.forecastFileName} notes={fcNotes} stored={fcStored} storeError={fcStoreError} compact />
+          ) : (
+            <div className="rounded border border-dashed border-[rgba(74,111,165,0.4)] p-2 text-xs text-[#7A8BA8] flex items-start gap-2">
+              <CloudSun size={14} className="text-[#4A6FA5] mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p>No Route 7 Day Forecast loaded — drop the forecast .pdf on this panel or pick it below. Cells can still be set by hand.</p>
+                {latest && (
+                  <button type="button" onClick={useStored}
+                    className="text-[#E05206] hover:text-white underline underline-offset-2">
+                    Use the forecast already stored today ({describeIssue(latest.document) || latest.issuedAt}{latest.validFromDate !== todayIsoLocal() ? ` · valid from ${latest.validFromDate}` : ''})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {fcError && <p className="text-red-400 text-xs mt-1">{fcError}</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          <input ref={fileRef} type="file" accept=".pdf" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) loadFile(f); e.target.value = '' }} />
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={fcBusy}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded bg-[#0A0F1E] text-[#7A8BA8] border border-[rgba(74,111,165,0.3)] hover:border-[#E05206] hover:text-white transition-all disabled:opacity-50">
+            {fcBusy ? <Loader2 size={12} className="animate-spin" /> : <CloudDownload size={12} />}
+            {log.forecast ? 'Replace forecast PDF' : 'Load forecast PDF'}
+          </button>
+        </div>
       </div>
 
       {/* Season selector */}
@@ -631,12 +876,13 @@ function FiveDaySection({ log, onChange }: {
         <table className="w-full border-collapse table-fixed">
           <thead>
             <tr>
-              <th className="text-left px-2 py-1.5 w-36 text-[10px] text-[#4A6FA5] font-semibold uppercase tracking-wider bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)]">
-                East Midlands Route<br />5 Day Look Ahead
+              <th className="text-left px-2 py-1.5 w-32 text-[10px] text-[#4A6FA5] font-semibold uppercase tracking-wider bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)]">
+                East Midlands Route<br />7 Day Look Ahead
               </th>
               {days.map((d, i) => (
                 <th key={i} className="text-center px-1 py-1.5 text-[#7A8BA8] font-semibold text-[11px] bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)]">
-                  {d}
+                  {d.length > 9 ? d.slice(0, 3) : d}
+                  <div className="text-[9px] font-mono font-normal text-[#4A5A72]">{dates[i] ? dates[i].slice(8, 10) + '/' + dates[i].slice(5, 7) : ''}</div>
                 </th>
               ))}
             </tr>
@@ -644,36 +890,32 @@ function FiveDaySection({ log, onChange }: {
           <tbody>
             {/* Risks row */}
             <tr>
-              <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
-                Risks
-              </td>
+              <td className={labelCell}>Risks</td>
               {notes.risks.map((v, i) => (
                 <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
                   <textarea
                     value={v}
                     rows={1}
                     onChange={e => updateNote('risks', i, e.target.value)}
-                    className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
+                    className="w-full bg-transparent text-white text-xs px-1 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
                     style={{ minHeight: '1.75rem' }}
                   />
                 </td>
               ))}
             </tr>
 
-            {/* Weather rows */}
-            {weatherRowRoutes.map(({ key, label }) => (
-              <tr key={key}>
-                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
-                  {label}
-                </td>
-                {weather[key].map((d, i) => (
+            {/* Weather rows — one per forecast area */}
+            {FORECAST_AREAS.map(area => (
+              <tr key={area.key}>
+                <td className={labelCell}>Weather {area.label}</td>
+                {weather[area.key].map((d, i) => (
                   <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
                     <WeatherCell
                       day={d}
-                      isOpen={editing?.kind === 'weather' && editing.route === key && editing.dayIdx === i}
-                      onOpen={() => setEditing({ kind: 'weather', route: key, dayIdx: i })}
+                      isOpen={editing?.kind === 'weather' && editing.area === area.key && editing.dayIdx === i}
+                      onOpen={() => setEditing({ kind: 'weather', area: area.key, dayIdx: i })}
                       onClose={() => setEditing(null)}
-                      onToggle={(risk, level) => toggleRisk(key, i, risk, level)}
+                      onToggle={(risk, level) => toggleRisk(area.key, i, risk, level)}
                     />
                   </td>
                 ))}
@@ -683,16 +925,14 @@ function FiveDaySection({ log, onChange }: {
             {/* TOC / FOC rows */}
             {bottomTextRows.map(({ key, label }) => (
               <tr key={key}>
-                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
-                  {label}
-                </td>
+                <td className={labelCell}>{label}</td>
                 {notes[key].map((v, i) => (
                   <td key={i} className="p-0.5 border border-[rgba(74,111,165,0.2)] align-top">
                     <textarea
                       value={v}
                       rows={1}
                       onChange={e => updateNote(key, i, e.target.value)}
-                      className="w-full bg-transparent text-white text-xs px-1.5 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
+                      className="w-full bg-transparent text-white text-xs px-1 py-1 outline-none focus:bg-[#0A0F1E] rounded resize-none overflow-hidden [field-sizing:content]"
                       style={{ minHeight: '1.75rem' }}
                     />
                   </td>
@@ -703,9 +943,7 @@ function FiveDaySection({ log, onChange }: {
             {/* Summer: Steam Fire Risk row */}
             {season === 'Summer' && (
               <tr>
-                <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
-                  Steam Fire Risk
-                </td>
+                <td className={labelCell}>Steam Fire Risk</td>
                 {steamFireRisk.map((v, i) => (
                   <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
                     <SteamFireRiskCell
@@ -728,9 +966,7 @@ function FiveDaySection({ log, onChange }: {
                   { rowKey: 'lincoln'  as const, label: 'Lincoln Adhesion',   data: lincolnAdhesion  },
                 ] as const).map(({ rowKey, label, data }) => (
                   <tr key={rowKey}>
-                    <td className="px-2 py-1 text-[11px] font-semibold text-[#4A6FA5] bg-[rgba(74,111,165,0.08)] border border-[rgba(74,111,165,0.2)]">
-                      {label}
-                    </td>
+                    <td className={labelCell}>{label}</td>
                     {data.map((v, i) => (
                       <td key={i} className="p-1 border border-[rgba(74,111,165,0.2)] align-top">
                         <AdhesionCell
@@ -749,19 +985,33 @@ function FiveDaySection({ log, onChange }: {
           </tbody>
         </table>
       </div>
+
+      {log.forecast?.summary24h && (
+        <div className="grid md:grid-cols-2 gap-3 text-xs">
+          <div className="rounded bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)] p-2">
+            <p className="text-[10px] text-[#4A6FA5] font-semibold uppercase tracking-wider mb-1">Forecast – 24 hours</p>
+            <p className="text-[#C9D1E0] leading-relaxed">{log.forecast.summary24h}</p>
+          </div>
+          <div className="rounded bg-[#0A0F1E] border border-[rgba(74,111,165,0.2)] p-2">
+            <p className="text-[10px] text-[#4A6FA5] font-semibold uppercase tracking-wider mb-1">Forecast – 2 to 7 days</p>
+            <p className="text-[#C9D1E0] leading-relaxed">{log.forecast.summary2to7 || '—'}</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ─── Step 2: Roster ─────────────────────────────────────────────────────────────
 
-function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }: {
+function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames, testMode }: {
   log:          LogState
   onChange:     (updates: Partial<LogState>) => void
   onNext:       () => void
   onBack:       () => void
   knownNames:   string[]
   onLearnNames: (names: string[]) => void
+  testMode:     boolean
 }) {
   const [importing, setImporting]       = useState(false)
   const [importMsg, setImportMsg]       = useState<string>('')
@@ -992,7 +1242,7 @@ function RosterStep({ log, onChange, onNext, onBack, knownNames, onLearnNames }:
         </div>
       )}
 
-      <FiveDaySection log={log} onChange={onChange} />
+      <LookAheadSection log={log} onChange={onChange} testMode={testMode} />
 
       {isRosterhubConfigured() && (
         <div className="card p-4">
@@ -1749,7 +1999,7 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Incident summary infographics</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Categorised incident tables</div>
           <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> Disruption impact ranking</div>
-          <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 5 Day Look Ahead (manual entry)</div>
+          <div className="flex items-center gap-2"><Check size={11} className="text-[#27AE60]" /> 7 Day Look Ahead {log.forecast ? `(forecast ${describeIssue(log.forecast).replace(/^Issued /, 'issued ')})` : '(manual entry — no forecast PDF loaded)'}</div>
           {esrFresh && esr?.ok
             ? <div className="flex items-center gap-2">
                 <Check size={11} className="text-[#27AE60]" />
@@ -1975,11 +2225,11 @@ export default function Home() {
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
-        {step === 1 && <UploadStep onComplete={onUploadComplete} />}
+        {step === 1 && <UploadStep onComplete={onUploadComplete} testMode={testMode} />}
         {step === 2 && (
           <RosterStep log={log} onChange={update}
             onNext={() => setStep(3)} onBack={() => setStep(1)}
-            knownNames={knownNames} onLearnNames={learnNames} />
+            knownNames={knownNames} onLearnNames={learnNames} testMode={testMode} />
         )}
         {step === 3 && (
           <ReviewStep log={log}

@@ -7,8 +7,16 @@ Automated daily operations report: CCIL `.docx` export → structured PDF. Parsi
 
 ## How It Works
 
-1. **Upload** — Drop in a CCIL `.docx` export
-2. **Parse** — mammoth.js reads the DOCX; regex parser extracts and classifies every incident locally
+1. **Upload** — Drop in a CCIL `.docx` export and the Network Rail **Route 7 Day
+   Forecast** `.pdf` (both at once or one at a time; the forecast can also be
+   added on the Roster step)
+2. **Parse** — mammoth.js reads the DOCX; regex parser extracts and classifies
+   every incident locally. pdf.js reads the forecast PDF: the four hazard
+   tables (Lincolnshire, East Mids North, East Mids South, London - Luton × 7
+   days, level from the cell colour + confidence word, temperatures, ice day)
+   and the 24 hour / 2-7 day narrative. The parsed issue is written to the
+   shared `weather_forecasts` / `weather_forecast_days` tables straight away so
+   the 09:00 route call and the 05:30 message can use it
 3. **Roster** — Enter daily shift staffing manually
 4. **Review** — Add, edit, remove, or re-flag incidents
 5. **Generate** — jsPDF builds the report in-browser → download PDF. When NRSDB
@@ -24,7 +32,7 @@ to Supabase only when those integrations are configured.
 
 - Cover page (NR branding, OFFICIAL-SENSITIVE classification)
 - Shift roster grid (day / night)
-- 5 Day Look Ahead
+- 7 Day Look Ahead — forecast narrative plus a 7 day × 4 area hazard grid (levels, triggers, max / min temperatures), pre-filled from the forecast PDF and editable
 - Emergency Speed Restrictions — every imposed ESR for the route, NEW and AMENDED rows highlighted, plus a table of restrictions REMOVED since the previous snapshot (optional, needs NRSDB credentials)
 - Headline performance metrics
 - Significant incidents summary
@@ -197,7 +205,7 @@ handler that runs server-side (Vercel function / Netlify function). It:
      speed, line speed, location, reason or ETR changed
    - **REMOVED** — in the prior snapshot, not imposed today
 5. Returns the classified list; the PDF renders it on its own page after the
-   5 Day Look Ahead, with NEW rows tinted green, AMENDED rows tinted amber
+   7 Day Look Ahead, with NEW rows tinted green, AMENDED rows tinted amber
    (with a sub-row stating what changed) and a separate REMOVED table.
 
 Failure never blocks the log: if NRSDB is unreachable or the login fails, the
@@ -342,7 +350,8 @@ stands, as its final section.
   says so; it never blocks the log.
 
 Requires Supabase: run `supabase/migrations/012_out_of_use_register.sql`
-then `013_out_of_use_rag.sql`. Without Supabase the page still works but is
+then `013_out_of_use_rag.sql`. The 7 day forecast tables need
+`014_route_forecast_7x4.sql`. Without Supabase the page still works but is
 per-browser and the log cannot see it; the page and the Generate step both
 say so.
 
