@@ -1,4 +1,14 @@
-// ─── Weather / 5 Day Look Ahead ───────────────────────────────────────────────
+// ─── Weather / 7 Day Look Ahead ───────────────────────────────────────────────
+//
+// The look-ahead follows the Network Rail Route 7 Day Forecast: seven days
+// (today first) across the four forecast areas — Lincolnshire, East Midlands
+// North, East Midlands South and London - Luton. The cells are normally filled
+// from the forecast PDF (lib/weather/forecastParser.ts) and stay editable.
+
+import type { ForecastDocument, ForecastAreaKey } from './weather/forecastTypes'
+import { FORECAST_AREAS, FORECAST_AREA_KEYS } from './weather/forecastTypes'
+export type { ForecastDocument, ForecastAreaKey }
+export { FORECAST_AREAS, FORECAST_AREA_KEYS }
 
 export type HazardLevel = 'GREEN' | 'AWARE' | 'ADVERSE' | 'EXTREME'
 export type RiskLevel   = Exclude<HazardLevel, 'GREEN'>
@@ -17,17 +27,25 @@ export const WEATHER_RISK_OPTIONS = [
 ] as const
 export type WeatherRisk = typeof WEATHER_RISK_OPTIONS[number]
 
+export const LOOK_AHEAD_DAYS = 7
+
+export interface DayTemps {
+  minMorning: number | null   // Min Temp Morn (06-11)
+  max:        number | null   // Max Temp (06-18)
+  minNight:   number | null   // Min Temp (18-06)
+}
+
 export interface DayWeather {
   risks: Partial<Record<WeatherRisk, RiskLevel>>
+  /** From the forecast PDF; absent for hand-entered cells. */
+  temps?: DayTemps
 }
 
-export interface FiveDayWeather {
-  eastMidlands: DayWeather[]   // exactly 5 entries
-  londonNorth:  DayWeather[]   // exactly 5 entries
-}
+/** Seven DayWeather entries per forecast area, index 0 = today. */
+export type LookAheadWeather = Record<ForecastAreaKey, DayWeather[]>
 
 export interface LookAheadNotes {
-  risks: string[]              // exactly 5 entries, default 'Nil'
+  risks: string[]              // exactly 7 entries, default 'Nil'
   toc:   string[]
   foc:   string[]
 }
@@ -48,46 +66,98 @@ export function worseHazard(a: HazardLevel, b: HazardLevel): HazardLevel {
   return HAZARD_RANK[a] >= HAZARD_RANK[b] ? a : b
 }
 
+/** Worst level per risk across several cells (used to fold the four areas into legacy two). */
+export function mergeRiskMaps(...maps: Array<Partial<Record<WeatherRisk, RiskLevel>>>): Partial<Record<WeatherRisk, RiskLevel>> {
+  const out: Partial<Record<WeatherRisk, RiskLevel>> = {}
+  for (const m of maps) {
+    for (const k of Object.keys(m) as WeatherRisk[]) {
+      const lvl = m[k]
+      if (!lvl) continue
+      const cur = out[k]
+      out[k] = cur ? (worseHazard(cur, lvl) as RiskLevel) : lvl
+    }
+  }
+  return out
+}
+
 export function deriveDaysFromDate(isoDate: string): string[] {
   const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-  if (!isoDate) return ['Day 1','Day 2','Day 3','Day 4','Day 5']
+  if (!isoDate) return Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => `Day ${i + 1}`)
   try {
     const [y, m, d] = isoDate.split('-').map(Number)
-    return Array.from({ length: 5 }, (_, i) => {
+    return Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => {
       const dt = new Date(y, m - 1, d + i)
       return DAYS[dt.getDay()]
     })
   } catch {
-    return ['Day 1','Day 2','Day 3','Day 4','Day 5']
+    return Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => `Day ${i + 1}`)
   }
 }
 
-// The 5 Day Look Ahead is forward-looking from the moment the report is
+// The 7 Day Look Ahead is forward-looking from the moment the report is
 // compiled, not from the log's reporting period. Always starts at "today".
 // NB: calls Date() — only invoke on the client (guard with useEffect in SSR).
 export function deriveUpcomingDays(): string[] {
-  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-  const today = new Date()
-  return Array.from({ length: 5 }, (_, i) => {
-    const dt = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)
-    return DAYS[dt.getDay()]
+  return deriveDaysFromDate(todayIsoLocal())
+}
+
+/** Today's date (local clock) as YYYY-MM-DD. Client-only. */
+export function todayIsoLocal(): string {
+  const t = new Date()
+  const p = (n: number) => (n < 10 ? '0' : '') + n
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+}
+
+/** The seven look-ahead dates, today first. Client-only. */
+export function deriveUpcomingDates(): string[] {
+  const today = todayIsoLocal()
+  const [y, m, d] = today.split('-').map(Number)
+  const p = (n: number) => (n < 10 ? '0' : '') + n
+  return Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => {
+    const dt = new Date(y, m - 1, d + i)
+    return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`
   })
 }
 
-export function makeEmptyFiveDayWeather(): FiveDayWeather {
+export function makeEmptyLookAheadWeather(): LookAheadWeather {
   const day = (): DayWeather => ({ risks: {} })
-  return {
-    eastMidlands: Array.from({ length: 5 }, day),
-    londonNorth:  Array.from({ length: 5 }, day),
+  const out = {} as LookAheadWeather
+  for (const key of FORECAST_AREA_KEYS) out[key] = Array.from({ length: LOOK_AHEAD_DAYS }, day)
+  return out
+}
+
+/** Accepts the pre-migration two-region shape (or anything partial) and returns a full 7x4 grid. */
+export function normaliseLookAheadWeather(raw: unknown): LookAheadWeather {
+  const out = makeEmptyLookAheadWeather()
+  if (!raw || typeof raw !== 'object') return out
+  const r = raw as Record<string, unknown>
+  const copy = (from: unknown, to: ForecastAreaKey) => {
+    if (!Array.isArray(from)) return
+    for (let i = 0; i < LOOK_AHEAD_DAYS && i < from.length; i++) {
+      const d = from[i] as DayWeather | undefined
+      if (d && typeof d === 'object' && d.risks) out[to][i] = { risks: { ...d.risks }, temps: d.temps }
+    }
   }
+  for (const key of FORECAST_AREA_KEYS) copy(r[key], key)
+  // Legacy: East Midlands → the three East Midlands areas; London North → London - Luton.
+  if (r.eastMidlands) { copy(r.eastMidlands, 'lincolnshire'); copy(r.eastMidlands, 'em_north'); copy(r.eastMidlands, 'em_south') }
+  if (r.londonNorth)  copy(r.londonNorth, 'london_luton')
+  return out
 }
 
 export function makeEmptyLookAheadNotes(): LookAheadNotes {
   return {
-    risks: Array.from({ length: 5 }, () => 'Nil'),
-    toc:   Array.from({ length: 5 }, () => 'Nil'),
-    foc:   Array.from({ length: 5 }, () => 'Nil'),
+    risks: Array.from({ length: LOOK_AHEAD_DAYS }, () => 'Nil'),
+    toc:   Array.from({ length: LOOK_AHEAD_DAYS }, () => 'Nil'),
+    foc:   Array.from({ length: LOOK_AHEAD_DAYS }, () => 'Nil'),
   }
+}
+
+/** Pads / trims a notes array to seven entries so pre-migration state still renders. */
+export function padTo7(values: string[] | undefined, fill = 'Nil'): string[] {
+  const v = values ? values.slice(0, LOOK_AHEAD_DAYS) : []
+  while (v.length < LOOK_AHEAD_DAYS) v.push(fill)
+  return v
 }
 
 // ─── Seasonal rows ────────────────────────────────────────────────────────────
@@ -114,9 +184,9 @@ export const ADHESION_LEVEL_OPTIONS: Array<{ value: AdhesionLevel; label: string
 export function makeEmptySeasonalData() {
   return {
     seasonMode:       'Standard' as SeasonMode,
-    steamFireRisk:    Array.from({ length: 5 }, (): SteamFireRiskLevel => 'GREEN'),
-    eastMidsAdhesion: Array.from({ length: 5 }, (): AdhesionLevel => 'GOOD_1_2'),
-    lincolnAdhesion:  Array.from({ length: 5 }, (): AdhesionLevel => 'GOOD_1_2'),
+    steamFireRisk:    Array.from({ length: LOOK_AHEAD_DAYS }, (): SteamFireRiskLevel => 'GREEN'),
+    eastMidsAdhesion: Array.from({ length: LOOK_AHEAD_DAYS }, (): AdhesionLevel => 'GOOD_1_2'),
+    lincolnAdhesion:  Array.from({ length: LOOK_AHEAD_DAYS }, (): AdhesionLevel => 'GOOD_1_2'),
   }
 }
 
@@ -244,12 +314,15 @@ export interface LogState {
   roster: RosterData
   incidents: Incident[]
   rawLogText?: string        // verbatim CCIL text for appendix
-  fiveDayWeather: FiveDayWeather
+  lookAheadWeather: LookAheadWeather     // 7 days x 4 forecast areas, today first
   lookAheadNotes: LookAheadNotes
+  /** The parsed Route 7 Day Forecast PDF this log's look-ahead was filled from, if any. */
+  forecast?: ForecastDocument | null
+  forecastFileName?: string | null
   seasonMode: SeasonMode
-  steamFireRisk: SteamFireRiskLevel[]    // 5 entries
-  eastMidsAdhesion: AdhesionLevel[]      // 5 entries
-  lincolnAdhesion: AdhesionLevel[]       // 5 entries
+  steamFireRisk: SteamFireRiskLevel[]    // 7 entries
+  eastMidsAdhesion: AdhesionLevel[]      // 7 entries
+  lincolnAdhesion: AdhesionLevel[]       // 7 entries
   status: 'empty' | 'parsed' | 'reviewed' | 'generated'
 }
 

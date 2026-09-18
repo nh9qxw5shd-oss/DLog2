@@ -3,7 +3,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
   LogState, Incident, RosterData, CATEGORY_CONFIG, IncidentCategory,
-  HazardLevel, WeatherRisk, deriveWeatherLevel, worseHazard,
+  HazardLevel, WeatherRisk, RiskLevel, DayTemps, ForecastDocument,
+  deriveWeatherLevel, worseHazard, mergeRiskMaps, normaliseLookAheadWeather,
+  FORECAST_AREA_KEYS, LOOK_AHEAD_DAYS,
 } from './types'
 import { backfillAreasByLocation, reapplyHighlights, londonNow, voteLogDate } from './ccilParser'
 
@@ -292,45 +294,65 @@ function incidentMatchKey(r: {
     .join('|')
 }
 
-// ─── Daily weather statement (5 Day Look Ahead persistence) ───────────────────
-// The look-ahead compiled with log date D is forward-looking from the morning
-// the report is generated (D+1): column i forecasts date D+1+i. One row is
-// written per forecast date so analytics can join a day's weather to that
-// day's incidents on weather_date = report_date.
+// ─── Daily weather statement (7 Day Look Ahead persistence) ───────────────────
+// One row per forecast date. The look-ahead in a report for log date D is
+// compiled the morning of D+1 and starts at "today", so its seven columns
+// forecast dates D+1 … D+7.
 //
 // Newest-source-wins: a forecast for date X can be written by the reports of
-// logs X-5 … X-1, and the closest report carries the most up-to-date
+// logs X-7 … X-1, and the closest report carries the most up-to-date
 // statement. An older report saved out of order (a backfill) never clobbers a
 // newer statement. The value that finally sticks for X is the FIRST column of
 // the report generated the morning of X — the last statement issued before
 // X's own log exists.
+//
+// The four forecast areas live in area_risks / area_levels / temps. The legacy
+// two-region columns are derived (East Midlands = worst of Lincolnshire, EM
+// North and EM South; London North = London - Luton) so Insight's existing
+// filters keep working.
 
 function addDaysIso(isoDate: string, n: number): string {
   const [y, m, d] = isoDate.split('-').map(Number)
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
 }
 
-async function upsertDailyWeather(sb: SupabaseClient, log: LogState): Promise<void> {
-  if (!log.date || !log.fiveDayWeather) return
+async function upsertDailyWeather(sb: SupabaseClient, log: LogState, forecastId: string | null): Promise<void> {
+  if (!log.date || !log.lookAheadWeather) return
+  const grid = normaliseLookAheadWeather(log.lookAheadWeather)
 
-  const rows = Array.from({ length: 5 }, (_, i) => {
-    const em = log.fiveDayWeather.eastMidlands[i] ?? { risks: {} }
-    const ln = log.fiveDayWeather.londonNorth[i]  ?? { risks: {} }
-    const emLevel: HazardLevel = deriveWeatherLevel(em)
-    const lnLevel: HazardLevel = deriveWeatherLevel(ln)
-    const riskTypes = Array.from(new Set([
-      ...Object.keys(em.risks), ...Object.keys(ln.risks),
-    ]))
+  const rows = Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => {
+    const areaRisks: Record<string, Partial<Record<WeatherRisk, RiskLevel>>> = {}
+    const areaLevels: Record<string, HazardLevel> = {}
+    const temps: Record<string, DayTemps> = {}
+    let overall: HazardLevel = 'GREEN'
+    const riskTypes = new Set<string>()
+    for (const key of FORECAST_AREA_KEYS) {
+      const cell = grid[key][i] ?? { risks: {} }
+      areaRisks[key] = cell.risks
+      const lvl = deriveWeatherLevel(cell)
+      areaLevels[key] = lvl
+      overall = worseHazard(overall, lvl)
+      if (cell.temps) temps[key] = cell.temps
+      Object.keys(cell.risks).forEach(r => riskTypes.add(r))
+    }
+    const emRisks = mergeRiskMaps(grid.lincolnshire[i].risks, grid.em_north[i].risks, grid.em_south[i].risks)
+    const lnRisks = grid.london_luton[i].risks
+    const emLevel = deriveWeatherLevel({ risks: emRisks })
+    const lnLevel = deriveWeatherLevel({ risks: lnRisks })
     return {
       weather_date:        addDaysIso(log.date, i + 1),
       source_report_date:  log.date,
       day_offset:          i + 1,
-      east_midlands_risks: em.risks,
-      london_north_risks:  ln.risks,
+      east_midlands_risks: emRisks,
+      london_north_risks:  lnRisks,
       east_midlands_level: emLevel,
       london_north_level:  lnLevel,
-      overall_level:       worseHazard(emLevel, lnLevel),
-      risk_types:          riskTypes,
+      overall_level:       overall,
+      area_risks:          areaRisks,
+      area_levels:         areaLevels,
+      temps,
+      forecast_id:         forecastId,
+      risk_types:          Array.from(riskTypes),
       risk_note:           log.lookAheadNotes?.risks[i] ?? null,
       toc_note:            log.lookAheadNotes?.toc[i]   ?? null,
       foc_note:            log.lookAheadNotes?.foc[i]   ?? null,
@@ -358,6 +380,142 @@ async function upsertDailyWeather(sb: SupabaseClient, log: LogState): Promise<vo
     .from('weather_lookahead')
     .upsert(winners, { onConflict: 'weather_date', ignoreDuplicates: false })
   if (error) throw new Error(`Weather look-ahead upsert failed: ${error.message}`)
+}
+
+// ─── Route 7 Day Forecast issues ──────────────────────────────────────────────
+// Written as soon as the forecast PDF is dropped in (so the 05:30 message can
+// use it before the log is generated) and again, idempotently, on report save.
+
+export interface StoredForecast {
+  id: string
+  issuedAt: string
+  alreadyStored: boolean
+}
+
+function forecastRow(forecast: ForecastDocument, fileName: string | null, hash: string | null) {
+  return {
+    issued_at:        forecast.issuedAt,
+    issued_by:        forecast.issuedBy,
+    title:            forecast.title || null,
+    route:            forecast.route,
+    valid_from:       forecast.validFrom,
+    valid_to:         forecast.validTo,
+    valid_from_date:  forecast.validFromDate,
+    summary_24h:      forecast.summary24h,
+    summary_2_7:      forecast.summary2to7,
+    forecaster_phone: forecast.forecasterPhone,
+    source_filename:  fileName,
+    source_hash:      hash,
+    warnings:         forecast.warnings,
+    document:         forecast,
+    imported_from:    'dlog2',
+    updated_at:       new Date().toISOString(),
+  }
+}
+
+function forecastDayRows(forecastId: string, forecast: ForecastDocument) {
+  const rows: Record<string, unknown>[] = []
+  for (const area of forecast.areas) {
+    for (const d of area.days) {
+      if (!d.date) continue
+      rows.push({
+        forecast_id:            forecastId,
+        issued_at:              forecast.issuedAt,
+        area_key:               area.key,
+        area_name:              area.name,
+        day_index:              d.dayIndex,
+        forecast_date:          d.date,
+        day_name:               d.dayName,
+        overall_level:          d.overallLevel,
+        risks:                  d.risks,
+        risk_types:             Object.keys(d.risks),
+        hazards: {
+          'Wind':                d.hazards.wind,
+          'Heavy Rain':          d.hazards.heavyRain,
+          'Convective Rainfall': d.hazards.convectiveRain,
+          'Snow':                d.hazards.snow,
+          'Frost':               d.hazards.frost,
+          'Temp Range':          d.hazards.tempRange,
+          'Lightning':           d.hazards.lightning,
+          'Ice Day':             d.iceDay,
+        },
+        min_temp_morning:       d.temps.minMorning.value,
+        max_temp:               d.temps.max.value,
+        min_temp_night:         d.temps.minNight.value,
+        min_temp_morning_level: d.temps.minMorning.level,
+        max_temp_level:         d.temps.max.level,
+        min_temp_night_level:   d.temps.minNight.level,
+        ice_day:                d.iceDay.value,
+        ice_day_confidence:     d.iceDay.confidence,
+      })
+    }
+  }
+  return rows
+}
+
+/**
+ * Store a parsed forecast issue. Idempotent on issued_at: a re-drop of the
+ * same PDF updates the row and its days in place. Returns null when Supabase
+ * is not configured or the forecast has no issue time to key on.
+ */
+export async function storeForecast(
+  forecast: ForecastDocument,
+  options: { fileName?: string | null; hash?: string | null } = {},
+): Promise<StoredForecast | null> {
+  const sb = getClient()
+  if (!sb || !forecast.issuedAt || !forecast.validFromDate) return null
+
+  const { data: prior } = await sb
+    .from('weather_forecasts')
+    .select('id, source_hash')
+    .eq('issued_at', forecast.issuedAt)
+    .maybeSingle()
+
+  const { data: row, error } = await sb
+    .from('weather_forecasts')
+    .upsert(forecastRow(forecast, options.fileName ?? null, options.hash ?? null), { onConflict: 'issued_at', ignoreDuplicates: false })
+    .select('id, issued_at')
+    .single()
+  if (error) throw new Error(`Forecast save failed: ${error.message}`)
+
+  const days = forecastDayRows(row.id, forecast)
+  if (days.length) {
+    const { error: dayErr } = await sb
+      .from('weather_forecast_days')
+      .upsert(days, { onConflict: 'forecast_id,area_key,forecast_date', ignoreDuplicates: false })
+    if (dayErr) throw new Error(`Forecast day rows save failed: ${dayErr.message}`)
+  }
+  return { id: row.id, issuedAt: row.issued_at, alreadyStored: !!prior }
+}
+
+export interface LatestForecastSummary {
+  id: string
+  issuedAt: string
+  issuedBy: string | null
+  validFromDate: string
+  summary24h: string | null
+  document: ForecastDocument
+}
+
+/** The newest stored forecast issue, for showing "a forecast is already in" on the upload step. */
+export async function fetchLatestForecast(): Promise<LatestForecastSummary | null> {
+  const sb = getClient()
+  if (!sb) return null
+  const { data, error } = await sb
+    .from('weather_forecasts')
+    .select('id, issued_at, issued_by, valid_from_date, summary_24h, document')
+    .order('issued_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return null
+  return {
+    id: data.id,
+    issuedAt: data.issued_at,
+    issuedBy: data.issued_by,
+    validFromDate: data.valid_from_date,
+    summary24h: data.summary_24h,
+    document: data.document as ForecastDocument,
+  }
 }
 
 export interface DailyWeatherDay {
@@ -560,11 +718,22 @@ export async function upsertReportData(
 
   const reportId = reportRow.id
 
-  // Persist the 5 Day Look Ahead statement against the dates it forecasts.
+  // Persist the 7 Day Look Ahead statement against the dates it forecasts.
   // Only the reviewed interactive flow reaches here — the additive bulk-import
   // path returns earlier and carries no weather data, so historical imports
-  // can never overwrite a real statement with empty defaults.
-  await upsertDailyWeather(sb, log)
+  // can never overwrite a real statement with empty defaults. The forecast
+  // issue the grid was filled from is stored first (idempotent) so the
+  // look-ahead rows can point at it.
+  let forecastId: string | null = null
+  if (log.forecast) {
+    try {
+      const stored = await storeForecast(log.forecast, { fileName: log.forecastFileName ?? null })
+      forecastId = stored?.id ?? null
+    } catch (e) {
+      console.warn('[forecast] store at save failed', e)
+    }
+  }
+  await upsertDailyWeather(sb, log, forecastId)
 
   if (annotated.length === 0) return
 

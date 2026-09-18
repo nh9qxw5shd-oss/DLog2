@@ -2,9 +2,11 @@
 
 import {
   LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather,
-  deriveUpcomingDays, deriveWeatherLevel,
+  deriveUpcomingDays, deriveUpcomingDates, deriveWeatherLevel,
+  normaliseLookAheadWeather, padTo7, LOOK_AHEAD_DAYS, FORECAST_AREAS,
   SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
 } from './types'
+import { describeIssue } from './weather/applyForecast'
 import type { ChartImages } from './chartRenderer'
 import type { CategorySettings } from './categorySettings'
 import type { EsrSnapshotResponse, EsrRow, EsrFieldChange } from './esr/types'
@@ -229,18 +231,22 @@ export async function generatePDF(
     y += 14
   }
 
-  // ── 5 Day Look Ahead table ────────────────────────────────────────────────
+  // ── 7 Day Look Ahead table ────────────────────────────────────────────────
 
-  const drawFiveDayLookAhead = () => {
-    const fw     = log.fiveDayWeather
-    const notes  = log.lookAheadNotes
+  const drawLookAhead = () => {
+    const grid   = normaliseLookAheadWeather(log.lookAheadWeather)
+    const notes  = {
+      risks: padTo7(log.lookAheadNotes?.risks),
+      toc:   padTo7(log.lookAheadNotes?.toc),
+      foc:   padTo7(log.lookAheadNotes?.foc),
+    }
     const tableW = W - M * 2
-    const labelW = 50
-    const dayW   = (tableW - labelW) / 5
+    const labelW = 38
+    const dayW   = (tableW - labelW) / LOOK_AHEAD_DAYS
+    const fc     = log.forecast ?? null
 
     const days   = deriveUpcomingDays()
-    const emDays = fw.eastMidlands
-    const lnDays = fw.londonNorth
+    const dates  = deriveUpcomingDates()
 
     const cell = (
       cx: number, cy: number, w: number, h: number,
@@ -250,56 +256,84 @@ export async function generatePDF(
       sdc(border); doc.setLineWidth(0.2); rc(cx, cy, w, h, 'S')
     }
 
+    // ── Forecast provenance + narrative ──────────────────────────────────
+    if (fc) {
+      sf('normal', 7); stc(C.midGray)
+      const prov = [fc.title, describeIssue(fc), fc.validFromDate ? `valid from ${fc.validFromDate}` : ''].filter(Boolean).join(' · ')
+      tx(prov, M, y + 3)
+      y += 6
+      const para = (heading: string, text: string | null) => {
+        if (!text) return
+        sf('bold', 7.5); stc(C.navy); tx(heading, M, y + 3); y += 4.5
+        sf('normal', 7.5); stc(C.darkGray)
+        const lines = doc.splitTextToSize(text, tableW)
+        tx(lines, M, y + 3)
+        y += lines.length * 3.3 + 3
+      }
+      para('Forecast – 24 hours (weather and hazard summary)', fc.summary24h)
+      para('Forecast – 2 to 7 days (weather and hazard summary)', fc.summary2to7)
+      y += 1
+    } else {
+      sf('italic', 7); stc(C.midGray)
+      tx('No Route 7 Day Forecast PDF was loaded for this log — weather cells were entered by hand.', M, y + 3)
+      y += 6
+    }
+
     // ── Row 1: header ─────────────────────────────────────────────────────
-    const HDR_H = 20
+    const HDR_H = 16
     cell(M, y, labelW, HDR_H, [210, 215, 222])
-    sf('bold', 6.5); stc(C.navy)
-    tx('East Midlands Route', M + 3, y + 7)
-    tx('5 Day Look Ahead', M + 3, y + 13)
+    sf('bold', 6); stc(C.navy)
+    tx('East Midlands Route', M + 2, y + 6)
+    tx('7 Day Look Ahead', M + 2, y + 11)
 
     days.forEach((day, i) => {
       const cx = M + labelW + i * dayW
       cell(cx, y, dayW, HDR_H, [225, 230, 237])
-      sf('bold', 8); stc(C.navy)
-      const label = day.length > 9 ? day.slice(0, 3) : day
-      tx(label, cx + dayW / 2, y + 13, { align: 'center' })
+      sf('bold', 7.5); stc(C.navy)
+      tx(day.slice(0, 3), cx + dayW / 2, y + 7, { align: 'center' })
+      sf('normal', 6); stc(C.steel)
+      const d = dates[i] ? `${dates[i].slice(8, 10)}/${dates[i].slice(5, 7)}` : ''
+      tx(d, cx + dayW / 2, y + 12, { align: 'center' })
     })
     y += HDR_H
 
-    // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────────
-    const textRow = (label: string, values: string[], minH = 12, labelBg: RGB = [232, 236, 241]) => {
-      const LINE_H = 3.5  // approx mm per line at 8pt bold
+    const labelBox = (label: string, rowH: number, bg: RGB = [232, 236, 241]) => {
+      cell(M, y, labelW, rowH, bg)
+      sf('bold', 6.5); stc(C.navy)
+      const llines = doc.splitTextToSize(label, labelW - 4)
+      const labelLineH = 2.8
+      const labelStartY = y + rowH / 2 - ((llines.length - 1) * labelLineH) / 2 + 1.2
+      tx(llines.slice(0, 3), M + 2, labelStartY)
+    }
 
-      sf('bold', 8)
-      const splitValues = Array.from({ length: 5 }, (_, i) => {
+    // ── Per-day free-text row (Risks / TOC / FOC) ─────────────────────────────
+    const textRow = (label: string, values: string[], minH = 11) => {
+      const LINE_H = 3.0  // approx mm per line at 7pt bold
+
+      sf('bold', 7)
+      const splitValues = Array.from({ length: LOOK_AHEAD_DAYS }, (_, i) => {
         const val = (values[i] ?? '').trim() || 'Nil'
-        return doc.splitTextToSize(val, dayW - 3)
+        return doc.splitTextToSize(val, dayW - 2)
       })
       const maxLines = Math.max(...splitValues.map(l => l.length))
-      const rowH = Math.max(minH, maxLines * LINE_H + 5)
+      const rowH = Math.max(minH, maxLines * LINE_H + 4)
 
-      cell(M, y, labelW, rowH, labelBg)
-      sf('bold', 7); stc(C.navy)
-      const llines = doc.splitTextToSize(label, labelW - 6)
-      const labelLineH = 3.0
-      const labelStartY = y + rowH / 2 - ((llines.length - 1) * labelLineH) / 2 + 1.5
-      tx(llines, M + 3, labelStartY)
+      labelBox(label, rowH)
 
-      sf('bold', 8); stc(C.darkGray)
+      sf('bold', 7); stc(C.darkGray)
       splitValues.forEach((lines, i) => {
         const cx = M + labelW + i * dayW
         cell(cx, y, dayW, rowH, C.offWhite)
-        const startY = y + rowH / 2 - ((lines.length - 1) * LINE_H) / 2 + 1.5
+        const startY = y + rowH / 2 - ((lines.length - 1) * LINE_H) / 2 + 1.2
         tx(lines, cx + dayW / 2, startY, { align: 'center' })
       })
       y += rowH
     }
 
-    // ── Weather row: per-cell derived level + risk-name triggers ──────────
-    const weatherRow = (label: string, weatherDays: DayWeather[], rowH = 26) => {
-      cell(M, y, labelW, rowH, [232, 236, 241])
-      const llines = doc.splitTextToSize(label, labelW - 6)
-      sf('bold', 7); stc(C.navy); tx(llines.slice(0, 3), M + 3, y + 6)
+    // ── Weather row: derived level + risk-name triggers + temperatures ────
+    const fmtT = (n: number | null | undefined) => (n === null || n === undefined || isNaN(n)) ? '–' : String(Math.round(n * 10) / 10)
+    const weatherRow = (label: string, weatherDays: DayWeather[], rowH = 20) => {
+      labelBox(label, rowH)
 
       weatherDays.forEach((wd, i) => {
         const cx    = M + labelW + i * dayW
@@ -308,25 +342,32 @@ export async function generatePDF(
         const fg    = HAZARD_FG[level]
         cell(cx, y, dayW, rowH, bg)
 
-        if (level === 'GREEN') { return }
-
-        sf('bold', 8); stc(fg)
-        tx(level, cx + dayW / 2, y + 9, { align: 'center' })
-
-        const triggers = Object.keys(wd.risks)
-        if (triggers.length) {
-          sf('normal', 5.5); stc(fg)
-          const tlines = doc.splitTextToSize(triggers.join(', '), dayW - 3)
-          tx(tlines.slice(0, 3), cx + dayW / 2, y + 15, { align: 'center' })
+        if (level !== 'GREEN') {
+          sf('bold', 7); stc(fg)
+          tx(level, cx + dayW / 2, y + 5, { align: 'center' })
+          const triggers = Object.keys(wd.risks)
+          if (triggers.length) {
+            sf('normal', 5); stc(fg)
+            const tlines = doc.splitTextToSize(triggers.join(', '), dayW - 2)
+            tx(tlines.slice(0, 2), cx + dayW / 2, y + 9, { align: 'center' })
+          }
+        } else if (wd.temps) {
+          sf('normal', 6); stc(fg)
+          tx('Normal', cx + dayW / 2, y + 6, { align: 'center' })
+        }
+        if (wd.temps) {
+          sf('bold', 6); stc(fg)
+          tx(`${fmtT(wd.temps.max)}° / ${fmtT(wd.temps.minNight)}°`, cx + dayW / 2, y + rowH - 4.5, { align: 'center' })
+          sf('normal', 4.5); stc(fg)
+          tx(`morn ${fmtT(wd.temps.minMorning)}°`, cx + dayW / 2, y + rowH - 1.5, { align: 'center' })
         }
       })
       y += rowH
     }
 
     textRow('Risks', notes.risks)
-    weatherRow('Weather\nEast Midlands', emDays)
-    weatherRow('Weather\nLondon North', lnDays)
-    textRow('TOC Operations\n& Depot start up', notes.toc, 14)
+    FORECAST_AREAS.forEach(area => weatherRow(`Weather\n${area.label}`, grid[area.key]))
+    textRow('TOC Operations & Depot start up', notes.toc, 12)
     textRow('FOC Operations', notes.foc)
 
     // ── Summer: Steam Fire Risk row ──────────────────────────────────────────
@@ -346,16 +387,14 @@ export async function generatePDF(
       const STEAM_LABELS: Record<SteamFireRiskLevel, string> = {
         GREEN: 'Green', AMBER: 'Amber', RED: 'Red', BLACK: 'Black',
       }
-      const steamH = 14
-      cell(M, y, labelW, steamH, [232, 236, 241])
-      sf('bold', 7); stc(C.navy)
-      tx('Steam Fire Risk', M + 3, y + 9)
-      const steamRisk = log.steamFireRisk ?? Array(5).fill('GREEN')
+      const steamH = 12
+      labelBox('Steam Fire Risk', steamH)
+      const steamRisk = padTo7(log.steamFireRisk as string[] | undefined, 'GREEN')
       steamRisk.forEach((level, i) => {
         const cx = M + labelW + i * dayW
         cell(cx, y, dayW, steamH, STEAM_BG[level as SteamFireRiskLevel])
-        sf('bold', 8); stc(STEAM_FG[level as SteamFireRiskLevel])
-        tx(STEAM_LABELS[level as SteamFireRiskLevel], cx + dayW / 2, y + 9, { align: 'center' })
+        sf('bold', 7); stc(STEAM_FG[level as SteamFireRiskLevel])
+        tx(STEAM_LABELS[level as SteamFireRiskLevel], cx + dayW / 2, y + 7.5, { align: 'center' })
       })
       y += steamH
     }
@@ -380,24 +419,21 @@ export async function generatePDF(
         ADHESION_LEVEL_OPTIONS.map(o => [o.value, o.label])
       ) as Record<AdhesionLevel, string>
 
-      const adhesH = 16
+      const adhesH = 14
       const drawAdhesionRow = (label: string, levels: AdhesionLevel[]) => {
-        cell(M, y, labelW, adhesH, [232, 236, 241])
-        sf('bold', 7); stc(C.navy)
-        const llines = doc.splitTextToSize(label, labelW - 6)
-        tx(llines.slice(0, 2), M + 3, y + 6)
+        labelBox(label, adhesH)
         levels.forEach((level, i) => {
           const cx = M + labelW + i * dayW
           cell(cx, y, dayW, adhesH, ADHES_BG[level])
-          const lines = doc.splitTextToSize(ADHES_LABEL[level], dayW - 3)
-          sf('bold', 7); stc(ADHES_FG[level])
-          tx(lines.slice(0, 2), cx + dayW / 2, y + adhesH / 2 + 1.5, { align: 'center' })
+          const lines = doc.splitTextToSize(ADHES_LABEL[level], dayW - 2)
+          sf('bold', 6); stc(ADHES_FG[level])
+          tx(lines.slice(0, 2), cx + dayW / 2, y + adhesH / 2 + 1.2, { align: 'center' })
         })
         y += adhesH
       }
 
-      const eastMids = (log.eastMidsAdhesion ?? Array(5).fill('GOOD_1_2')) as AdhesionLevel[]
-      const lincoln  = (log.lincolnAdhesion  ?? Array(5).fill('GOOD_1_2')) as AdhesionLevel[]
+      const eastMids = padTo7(log.eastMidsAdhesion as string[] | undefined, 'GOOD_1_2') as AdhesionLevel[]
+      const lincoln  = padTo7(log.lincolnAdhesion  as string[] | undefined, 'GOOD_1_2') as AdhesionLevel[]
       drawAdhesionRow('East Mids Adhesion', eastMids)
       drawAdhesionRow('Lincoln Adhesion',   lincoln)
     }
@@ -745,10 +781,10 @@ export async function generatePDF(
   const nightEnd = drawRosterHalf(log.roster.nightShift, 'NIGHT SHIFT', (W - M*2)/2 + 2)
   y = Math.max(dayEnd, nightEnd) + 8
 
-  // ── 1. 5 Day Look Ahead (page 2) ──────────────────────────────────────────
+  // ── 1. 7 Day Look Ahead (page 2) ──────────────────────────────────────────
   newPage()
-  sectionHead('5 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
-  drawFiveDayLookAhead()
+  sectionHead('7 DAY LOOK AHEAD', log.date ? formatDisplayDate(log.date) : undefined)
+  drawLookAhead()
 
   // ── 1b. Emergency Speed Restrictions (own page, when NRSDB is configured) ─
   drawEsrSection()
