@@ -35,6 +35,14 @@ export interface DayTemps {
   minNight:   number | null   // Min Temp (18-06)
 }
 
+/** Next-24h minimum: the lower of Min Temp Morn (06-11) and Min Temp (18-06),
+ *  or whichever is present when the other is blank. */
+export function lowestMinTemp(t: DayTemps | null | undefined): number | null {
+  if (!t) return null
+  const vals = [t.minMorning, t.minNight].filter((v): v is number => v !== null && v !== undefined && !isNaN(v))
+  return vals.length ? Math.min(...vals) : null
+}
+
 export interface DayWeather {
   risks: Partial<Record<WeatherRisk, RiskLevel>>
   /** From the forecast PDF; absent for hand-entered cells. */

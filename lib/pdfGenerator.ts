@@ -4,7 +4,7 @@ import {
   LogState, Incident, CATEGORY_CONFIG, ShiftSlot, HazardLevel, DayWeather,
   deriveUpcomingDays, deriveUpcomingDates, deriveWeatherLevel,
   normaliseLookAheadWeather, padTo7, LOOK_AHEAD_DAYS, FORECAST_AREAS,
-  SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
+  SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS, lowestMinTemp,
 } from './types'
 import { describeIssue } from './weather/applyForecast'
 import type { ChartImages } from './chartRenderer'
@@ -357,9 +357,9 @@ export async function generatePDF(
         }
         if (wd.temps) {
           sf('bold', 6); stc(fg)
-          tx(`${fmtT(wd.temps.max)}° / ${fmtT(wd.temps.minNight)}°`, cx + dayW / 2, y + rowH - 4.5, { align: 'center' })
+          tx(`${fmtT(wd.temps.max)}° / ${fmtT(lowestMinTemp(wd.temps))}°`, cx + dayW / 2, y + rowH - 4.5, { align: 'center' })
           sf('normal', 4.5); stc(fg)
-          tx(`morn ${fmtT(wd.temps.minMorning)}°`, cx + dayW / 2, y + rowH - 1.5, { align: 'center' })
+          tx(`morn ${fmtT(wd.temps.minMorning)}° · night ${fmtT(wd.temps.minNight)}°`, cx + dayW / 2, y + rowH - 1.5, { align: 'center' })
         }
       })
       y += rowH
