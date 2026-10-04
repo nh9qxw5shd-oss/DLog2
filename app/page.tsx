@@ -15,7 +15,7 @@ import {
   makeEmptyLookAheadWeather, makeEmptyLookAheadNotes, normaliseLookAheadWeather, padTo7,
   LOOK_AHEAD_DAYS, FORECAST_AREAS, ForecastAreaKey, ForecastDocument, todayIsoLocal,
   SeasonMode, SteamFireRiskLevel, AdhesionLevel, ADHESION_LEVEL_OPTIONS,
-  makeEmptySeasonalData,
+  makeEmptySeasonalData, lowestMinTemp,
 } from '@/lib/types'
 import {
   parseCCILText, extractPeriod, extractCreatedBy, parsePeriodHeader,
@@ -631,8 +631,8 @@ function WeatherCell({ day, isOpen, onOpen, onClose, onToggle }: {
           </>
         )}
         {temps && (
-          <div className="text-[8.5px] font-mono text-center opacity-90 mt-0.5" title="Max (06-18) / Min night (18-06) · Min morning (06-11)">
-            {fmtTemp(temps.max)}° / {fmtTemp(temps.minNight)}°
+          <div className="text-[8.5px] font-mono text-center opacity-90 mt-0.5" title="Max (06-18) / lowest of Min morning (06-11) and Min night (18-06)">
+            {fmtTemp(temps.max)}° / {fmtTemp(lowestMinTemp(temps))}°
           </div>
         )}
       </button>
