@@ -10,6 +10,7 @@
 //     session cookie value → paste below
 
 import { useEffect, useState, useCallback } from 'react'
+import { withBase } from '@/lib/basePath'
 import { Loader2, Check, AlertTriangle, RefreshCw, Trash2, Bookmark, KeyRound } from 'lucide-react'
 
 interface SessionSummary {
@@ -28,7 +29,7 @@ function fmt(iso: string | null | undefined): string {
 }
 
 function bookmarkletFor(origin: string): string {
-  const js = `(function(){if(!/nrsdb\\.uk$/.test(location.hostname)){alert('Open this bookmark while on nrsdb.uk (logged in).');return;}var c=document.cookie;if(!c){alert('No readable NRSDB cookie: the session cookie is HttpOnly. Use the paste method in DLog2 Settings.');return;}fetch('${origin}/api/esr/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cookie:c,via:'bookmarklet'})}).then(function(r){return r.json()}).then(function(d){alert('DLog2: '+(d.message||JSON.stringify(d)))}).catch(function(e){alert('DLog2: '+e)})})();`
+  const js = `(function(){if(!/nrsdb\\.uk$/.test(location.hostname)){alert('Open this bookmark while on nrsdb.uk (logged in).');return;}var c=document.cookie;if(!c){alert('No readable NRSDB cookie: the session cookie is HttpOnly. Use the paste method in DLog2 Settings.');return;}fetch('${origin}${withBase('/api/esr/session')}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cookie:c,via:'bookmarklet'})}).then(function(r){return r.json()}).then(function(d){alert('DLog2: '+(d.message||JSON.stringify(d)))}).catch(function(e){alert('DLog2: '+e)})})();`
   return 'javascript:' + encodeURIComponent(js)
 }
 
@@ -43,7 +44,7 @@ export default function NrsdbSessionCard() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/esr/session', { cache: 'no-store' })
+      const r = await fetch(withBase('/api/esr/session'), { cache: 'no-store' })
       setStatus(await r.json())
     } catch (e) {
       setStatus({ ok: false, message: (e as Error).message })
@@ -59,7 +60,7 @@ export default function NrsdbSessionCard() {
     try {
       // Accept either a bare value (assume PHPSESSID) or a full "name=value; …" header.
       const header = value.includes('=') ? value : `PHPSESSID=${value}`
-      const r = await fetch('/api/esr/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cookie: header, via: 'paste' }) })
+      const r = await fetch(withBase('/api/esr/session'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cookie: header, via: 'paste' }) })
       const d = await r.json()
       setMsg({ ok: !!d.ok, text: d.message || JSON.stringify(d) })
       if (d.ok) setCookie('')
@@ -72,7 +73,7 @@ export default function NrsdbSessionCard() {
   const forget = async () => {
     if (!confirm('Forget the stored NRSDB session? Unattended pulls stop until a new one is supplied.')) return
     setBusy(true)
-    try { await fetch('/api/esr/session', { method: 'DELETE' }); await refresh() } finally { setBusy(false) }
+    try { await fetch(withBase('/api/esr/session'), { method: 'DELETE' }); await refresh() } finally { setBusy(false) }
   }
 
   const s = status?.session ?? null

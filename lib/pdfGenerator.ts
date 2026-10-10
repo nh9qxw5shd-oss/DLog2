@@ -8,6 +8,7 @@ import {
 } from './types'
 import { describeIssue } from './weather/applyForecast'
 import type { ChartImages } from './chartRenderer'
+import { withBase } from './basePath'
 import type { CategorySettings } from './categorySettings'
 import type { EsrSnapshotResponse, EsrRow, EsrFieldChange } from './esr/types'
 import { describeChanges } from './esr/diff'
@@ -125,7 +126,7 @@ export async function generatePDF(
   const outOfUse    = options.outOfUse ?? null
   const { jsPDF }   = await import('jspdf')
   const autoTable   = (await import('jspdf-autotable')).default
-  const insignia    = await loadSvgAsImage('/route-insignia.svg')
+  const insignia    = await loadSvgAsImage(withBase('/route-insignia.svg'))
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
   const W = 210, H = 297, M = 14

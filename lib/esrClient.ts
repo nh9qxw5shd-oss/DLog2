@@ -7,6 +7,7 @@
 // transport failures into the same { ok:false } shape the route returns.
 
 import type { EsrSnapshotResponse } from './esr/types'
+import { withBase } from './basePath'
 
 export type { EsrSnapshotResponse, EsrSnapshotResult, EsrSnapshotFailure, EsrRow, EsrStatus, EsrFieldChange } from './esr/types'
 
@@ -32,7 +33,7 @@ export function isEsrFresh(r: EsrSnapshotResponse | null): boolean {
 // of asking the server to pull (see lib/esr/paste.ts).
 export async function fetchEsrSnapshot(reportDate: string, opts: { dryRun?: boolean; payload?: unknown } = {}): Promise<EsrSnapshotResponse> {
   try {
-    const resp = await fetch('/api/esr/snapshot', {
+    const resp = await fetch(withBase('/api/esr/snapshot'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reportDate, dryRun: !!opts.dryRun, ...(opts.payload !== undefined ? { payload: opts.payload } : {}) }),

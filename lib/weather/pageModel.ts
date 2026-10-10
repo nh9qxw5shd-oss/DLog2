@@ -62,9 +62,10 @@ let pdfjsPromise: Promise<PdfjsModule> | null = null
 /**
  * Loads pdfjs once. In the browser the worker is served from the app's own
  * origin: scripts/copy-pdf-worker.js copies it into public/ before dev/build
- * (Next's minifier cannot bundle the .mjs worker as an asset).
+ * (Next's minifier cannot bundle the .mjs worker as an asset). The URL carries
+ * the base path (next.config.js) because it is built by hand.
  */
-export const PDF_WORKER_URL = '/pdf.worker.min.mjs'
+export const PDF_WORKER_URL = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ''}/pdf.worker.min.mjs`
 
 export async function loadPdfjs(): Promise<PdfjsModule> {
   if (!pdfjsPromise) {

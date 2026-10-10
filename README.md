@@ -5,6 +5,25 @@ Automated daily operations report: CCIL `.docx` export → structured PDF. Parsi
 
 ---
 
+## Mounted on the Derby Control hub
+
+DLog2 is served at `overseer.derbycontrol.co.uk/log`: the hub proxies `/log/*`
+to this deployment. `next.config.js` sets `basePath: '/log'`, so the standalone
+host serves the same build under `/log` too (`dlog2.derbycontrol.co.uk/log`).
+
+- **Old page URLs redirect.** `/`, `/out-of-use` (maintenance bookmarks),
+  `/import` and `/settings` redirect (307) to the same page under `/log`.
+- **Old ESR API paths are rewritten, not redirected.** `/api/esr/*` (the push
+  script, the keep-alive scheduler) is proxied to `/log/api/esr/*` on the same
+  host with method, headers, body and query intact. New callers should use
+  `/log/api/esr/*` directly.
+- **Building URLs by hand.** `<Link>`, the router and Next's own assets add the
+  prefix automatically. Anything else (`fetch` of an API route, a public file,
+  the pdf.js worker, a raw `<a href>`) goes through `withBase()` from
+  `lib/basePath.ts`, which reads `NEXT_PUBLIC_BASE_PATH`.
+
+---
+
 ## How It Works
 
 1. **Upload** — Drop in a CCIL `.docx` export and the Network Rail **Route 7 Day
@@ -121,7 +140,7 @@ git clone https://github.com/YOUR_ORG/emcc-daily-log.git
 cd emcc-daily-log
 npm install
 npm run dev
-# Open http://localhost:3000
+# Open http://localhost:3000/log
 ```
 
 No `.env` file needed.

@@ -17,7 +17,8 @@ Setup:
     NRSDB_EMAIL       = you@networkrail.co.uk
     NRSDB_PASSWORD    = ...
     NRSDB_ROUTECODE   = EM                 (optional)
-    DLOG2_URL         = https://<your-dlog2-host>
+    DLOG2_URL         = https://<your-dlog2-host>/log   (the app's base path; a host without
+                        /log still works, the old /api/esr/* paths are rewritten)
     ESR_INGEST_TOKEN  = <same value as the ESR_INGEST_TOKEN env var on the host>
 
 Run:

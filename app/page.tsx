@@ -32,6 +32,7 @@ import { isRosterhubConfigured, fetchRosterFromHub, fetchKnownStaffNames } from 
 import { renderHistoricalCharts, ChartImages } from '@/lib/chartRenderer'
 import { readCategorySettings } from '@/lib/categorySettings'
 import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRSDB_FEED_URL, londonToday } from '@/lib/esrClient'
+import { withBase } from '@/lib/basePath'
 import { useTestMode } from '@/lib/testMode'
 import { fetchOutOfUseRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
 
@@ -2025,7 +2026,7 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
                     {(() => { const c = ragCounts(oou.items); const bits = [c.RED && `${c.RED} red`, c.AMBER && `${c.AMBER} amber`, c.GREEN && `${c.GREEN} green`, c.UNRATED && `${c.UNRATED} not assessed`].filter(Boolean); return bits.length ? ` · ${bits.join(' · ')}` : '' })()}
                     {oou.lastUpdated ? ` · last change ${oouAgo(oou.lastUpdated)}` : ''}{oou.source === 'local' ? ' · this browser only' : ''})
                   </span>
-                  <a href="/out-of-use" target="_blank" rel="noopener noreferrer" className="text-[#4A6FA5] hover:text-white underline underline-offset-2">open</a>
+                  <a href={withBase('/out-of-use')} target="_blank" rel="noopener noreferrer" className="text-[#4A6FA5] hover:text-white underline underline-offset-2">open</a>
                 </div>
           )}
           {isSupabaseConfigured() && (
@@ -2195,11 +2196,11 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <a href="/out-of-use" target="_blank" rel="noopener noreferrer" title="Out of Use Infrastructure Register — maintained by maintenance, printed at the end of every log. Opens in a new tab; the register page has no way back here."
+            <a href={withBase('/out-of-use')} target="_blank" rel="noopener noreferrer" title="Out of Use Infrastructure Register — maintained by maintenance, printed at the end of every log. Opens in a new tab; the register page has no way back here."
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-[rgba(74,111,165,0.35)] text-[#7A8BA8] hover:text-white hover:border-[#4A6FA5] transition-colors font-mono">
               <ExternalLink size={11} /> Out of Use Register
             </a>
-            <a href="/settings" className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
+            <a href={withBase('/settings')} className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
             <TestModeToggle on={testMode} onChange={setTestMode} />
             <span className={cn('pulse-dot w-2 h-2 rounded-full inline-block', testMode ? 'bg-amber-400' : 'bg-[#27AE60]')} />
             <LiveClock />
