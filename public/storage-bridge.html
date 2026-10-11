@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>Storage bridge</title>
+</head>
+<body>
+<script>
+// Storage bridge for the Derby Control hub (PotatOS). Identical copy in every system that keeps
+// browser storage; keep them byte-identical.
+//
+// The hub (overseer.derbycontrol.co.uk) shows this system in a frame on its own origin, so the
+// browser keeps a separate localStorage there. The hub opens this page invisibly on the
+// system's own address and syncs the system's keys both ways, so the standalone site and the
+// hub see the same saved state. Only the hub's origin may talk to it; it only touches keys that
+// start with the prefixes the hub names for this system, never theme keys or sign-in tokens.
+(function () {
+  "use strict";
+  var HUB = "https://overseer.derbycontrol.co.uk";
+  var BACKUP_KEY = "potatos_sync_backup";
+  var prefixes = [];
+
+  function owned(key) {
+    if (typeof key !== "string" || /theme/i.test(key) || /^sb-|supabase\.auth|gotrue/i.test(key)) return false;
+    for (var i = 0; i < prefixes.length; i++) if (key.indexOf(prefixes[i]) === 0) return true;
+    return false;
+  }
+
+  function dump() {
+    var out = {};
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (owned(k)) out[k] = localStorage.getItem(k);
+    }
+    return out;
+  }
+
+  function reply(source, msg) {
+    msg.type = "potatos-storage";
+    source.postMessage(msg, HUB);
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.origin !== HUB || !e.source) return;
+    var m = e.data || {};
+    if (m.type !== "potatos-storage") return;
+    try {
+      if (m.op === "hello") {
+        prefixes = (Array.isArray(m.prefixes) ? m.prefixes : []).filter(function (p) {
+          return typeof p === "string" && p.length >= 2;
+        });
+        reply(e.source, { op: "dump", id: m.id, data: dump() });
+      } else if (m.op === "set" && owned(m.key)) {
+        if (m.conflict) {
+          // Keep what was here before an overwrite the hub could not merge, just in case.
+          var prev = localStorage.getItem(m.key);
+          if (prev !== null) {
+            var b = {};
+            try { b = JSON.parse(localStorage.getItem(BACKUP_KEY) || "{}") || {}; } catch (_) { b = {}; }
+            b[m.key] = { at: new Date().toISOString(), value: prev };
+            localStorage.setItem(BACKUP_KEY, JSON.stringify(b));
+          }
+        }
+        if (m.value === null) localStorage.removeItem(m.key);
+        else localStorage.setItem(m.key, String(m.value));
+      }
+    } catch (err) {
+      reply(e.source, { op: "error", id: m.id, message: String(err && err.message || err) });
+    }
+  });
+
+  // A change made on the standalone site (another tab) while the hub has this open.
+  window.addEventListener("storage", function (e) {
+    if (!owned(e.key) || window.parent === window) return;
+    window.parent.postMessage({ type: "potatos-storage", op: "changed", key: e.key, value: e.newValue }, HUB);
+  });
+
+  if (window.parent !== window) window.parent.postMessage({ type: "potatos-storage", op: "ready" }, HUB);
+})();
+</script>
+</body>
+</html>
