@@ -20,8 +20,10 @@ import {
   OOU_SECTIONS, OOU_SECTION_SPECS, OOU_RAGS, OOU_RAG_SPECS, OOU_UNRATED,
   blankDraft, isOouCloud, ragCounts,
   fetchOutOfUseRegister, createOouItem, updateOouItem, deleteOouItem, moveOouItem,
-  readEditorName, writeEditorName, fmtSince, daysSince, ago, fmtStamp,
+  readEditorName, writeEditorName, subscribeEditorName, subscribeLocalRegister,
+  fmtSince, daysSince, ago, fmtStamp,
 } from '@/lib/outOfUse'
+import { useFocusSafe } from '@/lib/storageSync'
 
 function cn(...cls: (string | false | undefined | null)[]) {
   return cls.filter(Boolean).join(' ')
@@ -393,6 +395,13 @@ export default function OutOfUsePage() {
 
   useEffect(() => { setName(readEditorName()); load() }, [load])
 
+  // Follow changes made in another copy of DLog2 (another tab, the hub frame):
+  // the name (held while the field is being typed in) and, when there is no
+  // database, the browser-local register.
+  const nameSync = useFocusSafe<string>(setName)
+  useEffect(() => subscribeEditorName(nameSync.receive), [nameSync])
+  useEffect(() => subscribeLocalRegister(() => { fetchOutOfUseRegister().then(setReg) }), [])
+
   const bySection = useMemo(() => {
     const m: Record<OouSection, OouItem[]> = { INFRA: [], UPS: [] }
     for (const i of reg?.items ?? []) m[i.section].push(i)
@@ -438,7 +447,11 @@ export default function OutOfUsePage() {
           <label className="block w-full sm:w-64">
             <span className={LABEL}>Your name (shown against your edits)</span>
             <input type="text" value={name} placeholder="e.g. J Smith, IME Derby"
-              onChange={e => setName(e.target.value)} onBlur={() => writeEditorName(name)}
+              ref={nameSync.ref}
+              onChange={e => { nameSync.edited(); setName(e.target.value) }}
+              // A name that arrived while typing here and was not then edited
+              // is newer than ours and already stored; otherwise save ours.
+              onBlur={() => { if (nameSync.holding()) nameSync.onBlur(); else writeEditorName(name) }}
               className={INPUT} />
           </label>
         </div>

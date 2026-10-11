@@ -34,7 +34,7 @@ import { readCategorySettings } from '@/lib/categorySettings'
 import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRSDB_FEED_URL, londonToday } from '@/lib/esrClient'
 import { withBase } from '@/lib/basePath'
 import { useTestMode } from '@/lib/testMode'
-import { fetchOutOfUseRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
+import { fetchOutOfUseRegister, subscribeLocalRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -1839,10 +1839,14 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
 
   // The Out of Use register is maintenance's, read as it stands. Fetched when
   // the step opens and again at build so a last-minute edit is not missed.
+  // Without a database the register is browser-local; follow edits made to it
+  // in another copy of DLog2 (another tab, the hub frame).
   useEffect(() => {
     let cancelled = false
-    fetchOutOfUseRegister().then(r => { if (!cancelled) setOou(r) })
-    return () => { cancelled = true }
+    const refresh = () => { fetchOutOfUseRegister().then(r => { if (!cancelled) setOou(r) }) }
+    refresh()
+    const unsubscribe = subscribeLocalRegister(refresh)
+    return () => { cancelled = true; unsubscribe() }
   }, [])
 
   // Ask the server for ESR data as soon as the step opens: a live pull where

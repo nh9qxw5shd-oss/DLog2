@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { IncidentCategory, Severity } from './types'
 import { CCIL_LABEL_MAP, normalizeForLookup } from './ccilParser'
 import { saveAppSettings, loadAppSettings, isSupabaseConfigured } from './supabaseClient'
+import { subscribeStorageKey } from './storageSync'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,11 @@ export function useCategorySettings() {
         .catch(() => {})
     }
   }, [])
+
+  // Settings changed in another copy of DLog2 (another tab, the hub frame).
+  // Only state is set: the value is already stored (and saved to Supabase by
+  // the copy that made the change), so nothing is saved back from here.
+  useEffect(() => subscribeStorageKey(STORAGE_KEY, () => setSettings(loadFromLocalStorage())), [])
 
   const persistSave = useCallback((next: CategorySettings) => {
     saveToLocalStorage(next)

@@ -21,6 +21,7 @@
 // so. In practice Supabase is required for this feature to do its job.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { subscribeStorageKey } from './storageSync'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -254,6 +255,13 @@ function writeLocal(items: OouItem[]): void {
   try { window.localStorage.setItem(LOCAL_KEY, JSON.stringify(items)) } catch { /* private mode */ }
 }
 
+/** Calls back when another copy of DLog2 (another tab, the hub frame) changes
+ *  the local-only register, so a page showing it can re-read. Never fires
+ *  when the register is in Supabase. Returns the unsubscribe function. */
+export function subscribeLocalRegister(onChange: () => void): () => void {
+  return subscribeStorageKey(LOCAL_KEY, () => onChange())
+}
+
 function localId(): string {
   try { return crypto.randomUUID() } catch { return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }
 }
@@ -374,7 +382,16 @@ export function readEditorName(): string {
 }
 
 export function writeEditorName(name: string): void {
-  try { window.localStorage.setItem(NAME_KEY, name.trim()) } catch { /* ignore */ }
+  try {
+    const v = name.trim()
+    if (window.localStorage.getItem(NAME_KEY) !== v) window.localStorage.setItem(NAME_KEY, v)
+  } catch { /* ignore */ }
+}
+
+/** Calls back with the name when another copy of DLog2 (another tab, the hub
+ *  frame) changes it. Returns the unsubscribe function. */
+export function subscribeEditorName(onChange: (name: string) => void): () => void {
+  return subscribeStorageKey(NAME_KEY, v => onChange(v ?? ''))
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
