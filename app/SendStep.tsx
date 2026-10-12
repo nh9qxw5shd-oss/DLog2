@@ -86,7 +86,8 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
   const lastLive = liveSends[0] as PublicSend | undefined
   const resumable = lastLive && (lastLive.status === 'partial' || lastLive.status === 'failed' ||
     (lastLive.status === 'sending' && Date.now() - new Date(lastLive.createdAt).getTime() > 5 * 60_000)) ? lastLive : undefined
-  const alreadySent = liveSends.some(s => s.status === 'sent')
+  // Sent, or part-sent: either way a fresh live send needs "send again".
+  const alreadySent = liveSends.some(s => s.status === 'sent' || s.status === 'partial')
 
   const pick = (kind: AttachmentKind, f: File | undefined) => {
     setFileError('')
@@ -262,7 +263,7 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
           {alreadySent && !testMode && (
             <label className="flex items-start gap-2 text-xs text-amber-300 cursor-pointer">
               <input type="checkbox" checked={again} onChange={e => { setAgain(e.target.checked); setConfirming(false) }} className="mt-0.5" />
-              Send again: this log has already gone to the list today
+              Send again: this log has already gone to the list (in full or in part) — everyone gets the current files
             </label>
           )}
           {!confirming ? (

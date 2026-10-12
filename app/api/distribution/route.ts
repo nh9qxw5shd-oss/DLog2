@@ -4,7 +4,7 @@
 // made for that log date (no addresses). Nothing secret is returned.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { config, publicConfig, db, activeAddresses, sendsFor, publicSend, DistributionError } from '@/lib/distribution/server'
+import { config, publicConfig, db, activeAddresses, sendsFor, liveSendsFor, publicSend, DistributionError } from '@/lib/distribution/server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,7 +19,12 @@ export async function GET(req: NextRequest) {
   try {
     const sb = db()
     out.activeCount = (await activeAddresses(sb)).length
-    out.sends = logDate ? (await sendsFor(sb, logDate)).map(publicSend) : []
+    if (logDate) {
+      // Every live send for the date (however many tests followed), plus recent tests.
+      const [live, recent] = await Promise.all([liveSendsFor(sb, logDate), sendsFor(sb, logDate)])
+      const byId = new Map([...recent, ...live].map(s => [s.id, s]))
+      out.sends = Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(publicSend)
+    } else out.sends = []
   } catch (e) {
     out.error = e instanceof DistributionError || e instanceof Error ? e.message : String(e)
   }

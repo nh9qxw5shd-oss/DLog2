@@ -397,7 +397,9 @@ and checked, it emails:
   embedded inline. `lib/distribution/emailTemplate.ts` holds it; the Send step
   shows a live preview.
 - **Attachments:** the forecast PDF and the CCIL `.docx` exactly as dropped
-  into DLog2, and the log PDF exactly as downloaded. A forecast taken from the
+  into DLog2 for this log, and the log PDF exactly as downloaded. Starting a
+  new log in the same page clears the previous log's files, so an earlier
+  day's forecast can never ride along. A forecast taken from the
   shared store (no PDF) or a reload clears a file; the Send step then asks for
   it, and a live send without one needs a tick.
 - **Recipients:** To the old RCM mailbox (`CS-LNE-DER-01A@networkrail.co.uk`),
@@ -416,12 +418,15 @@ Safeguards:
   only test sends are possible.
 - **No login.** Like the rest of DLog2, the Send step and the list page are
   open to anyone who has the URL; treat the URL as need-to-know.
-- **Once per log date.** A second live send for the same date is refused
-  unless "send again" is ticked; two desks pressing Send together, the first
-  wins.
+- **Once per log date.** A second live send for the same date (after a full
+  or part send) is refused unless "send again" is ticked, however many test
+  sends were made since; two desks pressing Send together, the first wins.
 - **Resumable.** Each email Resend accepts is recorded before the next goes.
   If a send stops part-way, the Send step offers to send to the addresses not
-  yet reached; nobody receives two copies.
+  yet reached; nobody receives two copies. A resume must carry exactly the
+  same files (checked by fingerprint), so everyone gets the same documents;
+  if the log was regenerated or a file replaced, "send again" sends the
+  current files to everyone.
 - **Confirmation** before a live send, and the operator's name is recorded.
 
 **Distribution list** (`/log/distribution`, header link "Distribution"): paste
@@ -437,7 +442,8 @@ SUPABASE_SERVICE_ROLE_KEY = …               # the list and sends are service-r
 DISTRIBUTION_FROM / DISTRIBUTION_TO / DISTRIBUTION_REPLY_TO   # optional overrides
 ```
 
-Database: `supabase/migrations/015_distribution.sql` (tables
+Database: `supabase/migrations/015_distribution.sql` and
+`016_distribution_attachment_hashes.sql` (tables
 `dlog2_distribution_recipients`, `dlog2_distribution_sends`; RLS with no
 policies). Tests for the list parser and template: `npm test`.
 

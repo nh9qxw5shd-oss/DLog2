@@ -8,7 +8,8 @@
 //   sentBy    operator name (stamped on the send record)
 //   testTo    test sends only: the one address to send to
 //   again     '1' to send a live log a second time for the same date
-//   resumeId  id of a live send that stopped part-way: send to the rest only
+//   resumeId  id of a live send that stopped part-way: send to the rest only,
+//             with exactly the same files (checked by fingerprint)
 //   log       the generated log PDF (required)
 //   forecast  the Route 7 Day Forecast PDF dropped into DLog2 (optional)
 //   ccil      the CCIL .docx export dropped into DLog2 (optional)
@@ -30,7 +31,7 @@ import {
 } from '@/lib/distribution/emailTemplate'
 import { BANNER, SIGNATURE } from '@/lib/distribution/emailImages'
 import {
-  config, db, activeAddresses, sendsFor, getSend, createSend, updateSend, resendSend,
+  config, db, activeAddresses, liveSendsFor, getSend, createSend, updateSend, resendSend,
   publicSend, DistributionError, ResendAttachment, SendRecord,
 } from '@/lib/distribution/server'
 
@@ -93,6 +94,7 @@ export async function POST(req: NextRequest) {
   }
 
   const kinds = files.map(f => f.kind)
+  const hashes = files.map(f => `${f.kind}:${createHash('sha256').update(f.bytes).digest('hex')}`)
   const attachments: ResendAttachment[] = [
     ...files.map(f => ({ filename: f.filename, content: f.bytes.toString('base64'), content_type: ATTACHMENT_RULES[f.kind].contentType })),
     ...[BANNER, SIGNATURE].map(i => ({ filename: i.filename, content: i.base64, content_type: i.contentType, content_id: i.cid })),
@@ -109,7 +111,7 @@ export async function POST(req: NextRequest) {
       const listed = (await activeAddresses(sb)).length
       const content = { logDate, attachments: kinds, test: { note: `TEST SEND to ${to} only. The live send goes To ${c.to} with ${listed} addresses by BCC.` } }
       const subject = subjectFor(content)
-      const rec = await createSend(sb, { logDate, isTest: true, sentBy, subject, toAddress: to, attachments: files.map(f => f.filename), recipientCount: 1 })
+      const rec = await createSend(sb, { logDate, isTest: true, sentBy, subject, toAddress: to, attachments: files.map(f => f.filename), attachmentHashes: hashes, recipientCount: 1 })
       try {
         const id = await resendSend(c.resendKey, {
           from: c.from, to: [to], reply_to: c.replyTo, subject,
@@ -137,22 +139,29 @@ export async function POST(req: NextRequest) {
       if (!prev || prev.isTest || prev.logDate !== logDate) return fail('That send cannot be resumed for this log.', 400)
       const stale = prev.status === 'sending' && Date.now() - new Date(prev.createdAt).getTime() >= STALE_MS
       if (!(prev.status === 'partial' || prev.status === 'failed' || stale)) return fail(`That send is ${prev.status}; nothing to resume.`, 409)
+      // Everyone on the list must receive the same documents: a resume carries
+      // exactly the files the first part of the send carried.
+      if (prev.sentTo.length && prev.attachmentHashes.join(',') !== hashes.join(',')) {
+        return fail(
+          'The attachments are not the same files that went to the first part of this send (the log was regenerated or a file was replaced). '
+          + 'Use the same files to finish it, or tick "send again" to send the current files to everyone.', 409)
+      }
       const done = new Set(prev.sentTo.map(emailKey))
       pending = listed.filter(e => !done.has(emailKey(e)))
       rec = prev
       await updateSend(sb, rec.id, { status: 'sending', error: null, recipientCount: prev.sentTo.length + pending.length, sentBy })
     } else {
-      const earlier = (await sendsFor(sb, logDate)).filter(isLiveInProgressOrDone)
+      const earlier = (await liveSendsFor(sb, logDate)).filter(isLiveInProgressOrDone)
       if (earlier.length && str('again') !== '1') {
         return fail('This log has already been sent to the distribution list.', 409, { previous: earlier.map(publicSend) })
       }
       rec = await createSend(sb, {
         logDate, isTest: false, sentBy, subject: subjectFor({ test: null }), toAddress: c.to,
-        attachments: files.map(f => f.filename), recipientCount: listed.length,
+        attachments: files.map(f => f.filename), attachmentHashes: hashes, recipientCount: listed.length,
       })
       // Two desks pressing Send together: the earlier record wins.
       if (str('again') !== '1') {
-        const race = (await sendsFor(sb, logDate)).filter(s => s.id < rec.id && isLiveInProgressOrDone(s))
+        const race = (await liveSendsFor(sb, logDate)).filter(s => s.id < rec.id && isLiveInProgressOrDone(s))
         if (race.length) {
           await updateSend(sb, rec.id, { status: 'failed', error: 'Another send for this log started first.', finished: true })
           return fail('Another send for this log started a moment ago.', 409, { previous: race.map(publicSend) })
