@@ -5,7 +5,7 @@ import {
   Upload, FileText, Users, AlertTriangle, ChevronRight,
   Plus, Trash2, Check, X, Download, Eye, RefreshCw,
   Loader2, AlertCircle, Activity, Flame, Shield, Pencil, CloudDownload, MapPin, FlaskConical,
-  ExternalLink, ClipboardPaste, Ban, CloudSun,
+  ExternalLink, ClipboardPaste, Ban, CloudSun, Send, Mail,
 } from 'lucide-react'
 import {
   LogState, Incident, RosterData, ShiftSlot, Severity,
@@ -35,6 +35,8 @@ import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRS
 import { withBase } from '@/lib/basePath'
 import { useTestMode } from '@/lib/testMode'
 import { fetchOutOfUseRegister, subscribeLocalRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
+import { setSourceFile } from '@/lib/distribution/client'
+import { SendStep } from './SendStep'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────────
 // Must NOT use Date on first render — server/client will differ → #425
@@ -100,6 +102,7 @@ const STEPS = [
   { id: 2, label: 'Roster Entry',  icon: Users    },
   { id: 3, label: 'Review',        icon: Eye      },
   { id: 4, label: 'Generate PDF',  icon: Download },
+  { id: 5, label: 'Send',          icon: Send     },
 ]
 
 function StepBar({ current }: { current: number }) {
@@ -111,7 +114,7 @@ function StepBar({ current }: { current: number }) {
         return (
           <div key={step.id} className="flex items-center">
             <div className={cn(
-              'flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all',
+              'flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 text-sm font-medium transition-all',
               status === 'active'   && 'bg-[#E05206] text-white',
               status === 'complete' && 'bg-[#27AE60] text-white',
               status === 'inactive' && 'bg-[#131C35] text-[#7A8BA8] border border-[rgba(74,111,165,0.25)]',
@@ -261,6 +264,7 @@ function UploadStep({ onComplete, testMode }: {
       const period = header.period
 
       setProgress(`Done — ${incidents.length} incidents extracted`)
+      setSourceFile('ccil', f)   // attached to the distribution email as the raw CCIL export
       setParsed({ data: { period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText })
     } catch (e: any) {
       setError(e.message || 'Parse failed')
@@ -275,6 +279,7 @@ function UploadStep({ onComplete, testMode }: {
     try {
       const result = await importForecastFile(f, { testMode })
       const applied = applyForecast(result.forecast, todayIsoLocal())
+      setSourceFile('forecast', f)   // attached to the distribution email
       setFcState({ status: 'done', result, notes: applied.notes })
     } catch (e: any) {
       setFcState({ status: 'error', error: e?.message || 'Forecast parse failed' })
@@ -749,6 +754,7 @@ function LookAheadSection({ log, onChange, testMode }: {
     try {
       const r = await importForecastFile(f, { testMode })
       setFcStored(r.stored); setFcStoreError(r.storeError)
+      setSourceFile('forecast', f)   // attached to the distribution email
       applyDoc(r.forecast, r.fileName)
     } catch (e: any) {
       setFcError(e?.message || 'Forecast parse failed')
@@ -759,6 +765,7 @@ function LookAheadSection({ log, onChange, testMode }: {
 
   const useStored = () => {
     if (!latest) return
+    setSourceFile('forecast', null)   // no PDF behind a stored issue; the Send step asks for one
     applyDoc(latest.document, null)
     setFcStored({ id: latest.id, issuedAt: latest.issuedAt, alreadyStored: true })
   }
@@ -1825,7 +1832,7 @@ function EsrCard({ esr, loading, fresh, skipped, testMode, onSkip, onUnskip, onP
 
 // ─── Step 4: Generate ───────────────────────────────────────────────────────────
 
-function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
+function GenerateStep({ log, onBack, onNext, testMode }: { log: LogState; onBack: () => void; onNext: () => void; testMode: boolean }) {
   const [generating, setGenerating] = useState(false)
   const [done, setDone]             = useState(false)
   const [error, setError]           = useState('')
@@ -1914,7 +1921,8 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
 
       // 4. Build and download PDF (with charts + ESRs + register if available)
       setStatusMsg('Building PDF…')
-      await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode, outOfUse: oouResult })
+      const pdf = await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode, outOfUse: oouResult })
+      setSourceFile('log', pdf)   // the Send step attaches exactly the file that was downloaded
       setDone(true)
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
@@ -2100,6 +2108,13 @@ function GenerateStep({ log, onBack, testMode }: { log: LogState; onBack: () => 
         </p>
       </div>
 
+      {done && (
+        <button onClick={onNext}
+          className="w-full py-2.5 px-4 bg-[#0A0F1E] text-white text-sm font-semibold rounded border border-[#E05206] hover:bg-[rgba(224,82,6,0.15)] transition-colors flex items-center justify-center gap-2">
+          <Mail size={14} /> Checked the log? Continue to Send <ChevronRight size={14} />
+        </button>
+      )}
+
       <button onClick={onBack} className="w-full py-2.5 border border-[rgba(74,111,165,0.4)] text-[#7A8BA8] text-sm rounded hover:text-white transition-colors">← Back to Review</button>
     </div>
   )
@@ -2171,9 +2186,12 @@ export default function Home() {
     setKnownNames(prev => mergeNames(prev, names))
   }, [])
 
-  const update = (patch: Partial<LogState>) => setLog(prev => ({ ...prev, ...patch }))
+  // Any change to the log after a build makes the generated PDF out of date, so
+  // the Send step must not attach it: it asks for the log to be generated again.
+  const update = (patch: Partial<LogState>) => { setSourceFile('log', null); setLog(prev => ({ ...prev, ...patch })) }
 
   const onUploadComplete = (data: Partial<LogState>, rawText: string) => {
+    setSourceFile('log', null)
     setLog(prev => ({
       ...prev,
       ...data,
@@ -2188,8 +2206,8 @@ export default function Home() {
     <div className="min-h-screen" style={{ background: 'var(--bg-primary)', position: 'relative', zIndex: 2 }}>
       {/* Header */}
       <header className="border-b border-[rgba(74,111,165,0.2)] bg-[#0F1729]">
-        <div className="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <div className="flex items-center gap-1">
               <div className="w-5 h-5 bg-[#E05206]" style={{ clipPath: 'polygon(0 0,100% 0,80% 100%,0 100%)' }} />
               <div className="w-3 h-5 bg-[#E05206]" style={{ clipPath: 'polygon(20% 0,100% 0,100% 100%,0 100%)' }} />
@@ -2199,11 +2217,12 @@ export default function Home() {
               <p className="text-[#7A8BA8] text-xs leading-none">EMCC Daily Report Generator</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 min-w-0">
             <a href={withBase('/out-of-use')} target="_blank" rel="noopener noreferrer" title="Out of Use Infrastructure Register — maintained by maintenance, printed at the end of every log. Opens in a new tab; the register page has no way back here."
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-[rgba(74,111,165,0.35)] text-[#7A8BA8] hover:text-white hover:border-[#4A6FA5] transition-colors font-mono">
               <ExternalLink size={11} /> Out of Use Register
             </a>
+            <a href={withBase('/distribution')} className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Distribution</a>
             <a href={withBase('/settings')} className="text-xs text-[#4A5A72] hover:text-[#7A8BA8] transition-colors font-mono">Settings</a>
             <TestModeToggle on={testMode} onChange={setTestMode} />
             <span className={cn('pulse-dot w-2 h-2 rounded-full inline-block', testMode ? 'bg-amber-400' : 'bg-[#27AE60]')} />
@@ -2223,7 +2242,7 @@ export default function Home() {
 
       {/* Step bar */}
       <div className="border-b border-[rgba(74,111,165,0.15)] bg-[#0F1729]">
-        <div className="max-w-5xl mx-auto px-6 py-3">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3">
           <StepBar current={step} />
         </div>
       </div>
@@ -2241,7 +2260,8 @@ export default function Home() {
             onUpdate={incidents => update({ incidents })}
             onNext={() => setStep(4)} onBack={() => setStep(2)} />
         )}
-        {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} testMode={testMode} />}
+        {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} onNext={() => setStep(5)} testMode={testMode} />}
+        {step === 5 && <SendStep log={log} onBack={() => setStep(4)} testMode={testMode} />}
       </main>
 
       <footer className="border-t border-[rgba(74,111,165,0.15)] mt-12">
