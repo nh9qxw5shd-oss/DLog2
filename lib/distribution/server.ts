@@ -1,30 +1,29 @@
 // ─── Daily log distribution: server-side only ─────────────────────────────────
-// Configuration, the operator key check, the distribution list and send
+// Configuration, the distribution list and send
 // history (service-role tables), and the Resend call. Imported only by the
 // /api/distribution route handlers.
 //
 // Host environment:
 //   RESEND_API_KEY          Resend key for the derbycontrol.co.uk domain (required to send)
-//   DISTRIBUTION_KEY        shared desk key; every send and every list change must present it
 //   SUPABASE_SERVICE_ROLE_KEY  the list and send history are service-role only
 //   DISTRIBUTION_FROM       optional, default "Derby Control <dailylog@derbycontrol.co.uk>"
-//   DISTRIBUTION_TO         optional, default Control.Derby@networkrail.co.uk (visible To; list is BCC)
+//   DISTRIBUTION_TO         optional, default CS-LNE-DER-01A@networkrail.co.uk (visible To, gets every
+//                           batch; the list, Control.Derby included, is BCC and gets one copy each)
 //   DISTRIBUTION_REPLY_TO   optional, default Control.Derby@networkrail.co.uk
 //   RESEND_API_URL          optional, default https://api.resend.com (a local stub for testing)
 
-import { timingSafeEqual, createHash } from 'crypto'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { emailKey, isValidEmail, ParsedAddress } from './addresses'
 
 export const DEFAULT_FROM = 'Derby Control <dailylog@derbycontrol.co.uk>'
-export const DEFAULT_TO = 'Control.Derby@networkrail.co.uk'
+export const DEFAULT_TO = 'CS-LNE-DER-01A@networkrail.co.uk'
+export const DEFAULT_REPLY_TO = 'Control.Derby@networkrail.co.uk'
 
 export interface DistributionConfig {
   from: string
   to: string
   replyTo: string
   resendKey: string | null
-  deskKey: string | null
   serviceRole: boolean
 }
 
@@ -33,9 +32,8 @@ export function config(): DistributionConfig {
   return {
     from: env('DISTRIBUTION_FROM') ?? DEFAULT_FROM,
     to: env('DISTRIBUTION_TO') ?? DEFAULT_TO,
-    replyTo: env('DISTRIBUTION_REPLY_TO') ?? DEFAULT_TO,
+    replyTo: env('DISTRIBUTION_REPLY_TO') ?? DEFAULT_REPLY_TO,
     resendKey: env('RESEND_API_KEY'),
-    deskKey: env('DISTRIBUTION_KEY'),
     serviceRole: !!env('SUPABASE_SERVICE_ROLE_KEY'),
   }
 }
@@ -44,17 +42,9 @@ export function config(): DistributionConfig {
 export function publicConfig(c: DistributionConfig = config()) {
   return {
     from: c.from, to: c.to, replyTo: c.replyTo,
-    resend: !!c.resendKey, deskKey: !!c.deskKey, database: c.serviceRole,
-    ready: !!c.resendKey && !!c.deskKey && c.serviceRole,
+    resend: !!c.resendKey, database: c.serviceRole,
+    ready: !!c.resendKey && c.serviceRole,
   }
-}
-
-/** True when the request carries the desk key. Fails closed when none is set. */
-export function keyOk(presented: string | null, c: DistributionConfig = config()): boolean {
-  if (!c.deskKey || !presented) return false
-  const a = createHash('sha256').update(presented.trim()).digest()
-  const b = createHash('sha256').update(c.deskKey).digest()
-  return timingSafeEqual(a, b)
 }
 
 export class DistributionError extends Error {

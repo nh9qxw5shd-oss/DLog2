@@ -4,21 +4,20 @@
 // After the log is generated and checked, emails it to the distribution list
 // through Resend: To the control mailbox, the list by BCC, with the log PDF,
 // the forecast PDF and the CCIL export that were dropped into DLog2 attached.
-// A test send to one address is always available; a live send needs the desk
-// key, the sender's name and a confirmation, and is refused in Test Mode.
+// A test send to one address is always available; a live send needs the
+// sender's name and a confirmation, and is refused in Test Mode.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, FileText, FlaskConical,
-  KeyRound, Loader2, Mail, Paperclip, RefreshCw, Send, Users,
+  Loader2, Mail, Paperclip, RefreshCw, Send, Users,
 } from 'lucide-react'
 import type { LogState } from '@/lib/types'
 import { withBase } from '@/lib/basePath'
 import {
-  getSourceFiles, setSourceFile, subscribeSourceFiles, readDeskKey, writeDeskKey, readSenderName, writeSenderName,
-  fetchDistributionStatus, sendDailyLog, previewUrl, DistributionStatus, PublicSend, SendResult, DESK_KEY_STORAGE,
+  getSourceFiles, setSourceFile, subscribeSourceFiles, readSenderName, writeSenderName,
+  fetchDistributionStatus, sendDailyLog, previewUrl, DistributionStatus, PublicSend, SendResult,
 } from '@/lib/distribution/client'
-import { subscribeStorageKey } from '@/lib/storageSync'
 import {
   AttachmentKind, ATTACHMENT_ORDER, ATTACHMENT_RULES, MAX_TOTAL_BYTES, BCC_PER_EMAIL, SUBJECT, ukDate,
 } from '@/lib/distribution/emailTemplate'
@@ -45,8 +44,6 @@ function useSourceFiles() {
 
 export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
   const files = useSourceFiles()
-  const [key, setKey] = useState('')
-  const [keyDraft, setKeyDraft] = useState('')
   const [name, setName] = useState('')
   const [testTo, setTestTo] = useState('')
   const [status, setStatus] = useState<DistributionStatus | null>(null)
@@ -59,22 +56,20 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
   const [showPreview, setShowPreview] = useState(true)
   const [fileError, setFileError] = useState('')
 
-  // Per-browser key and name; follow a change made in another copy of DLog2.
+  // Name and test address are remembered per browser.
   useEffect(() => {
-    const k = readDeskKey(); setKey(k); setKeyDraft(k)
     setName(readSenderName())
     setTestTo(readTestTo())
-    return subscribeStorageKey(DESK_KEY_STORAGE, v => { setKey(v ?? ''); setKeyDraft(v ?? '') })
   }, [])
 
   const refresh = useCallback(async () => {
     if (!log.date) return
     setLoading(true)
-    try { setStatus(await fetchDistributionStatus(log.date, readDeskKey())) }
+    try { setStatus(await fetchDistributionStatus(log.date)) }
     catch (e: any) { setStatus(null); setResult({ ok: false, mode: 'test', error: e?.message || 'Could not reach the server' }) }
     finally { setLoading(false) }
   }, [log.date])
-  useEffect(() => { refresh() }, [refresh, key])
+  useEffect(() => { refresh() }, [refresh])
 
   // The log PDF as a link the operator can open to check it once more.
   const logUrl = useMemo(() => (files.log ? URL.createObjectURL(files.log) : null), [files.log])
@@ -100,14 +95,12 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
     setSourceFile(kind, f)
   }
 
-  const saveKey = () => { writeDeskKey(keyDraft); setKey(keyDraft.trim()) }
-
   const send = async (mode: 'test' | 'live', resumeId?: number) => {
     setBusy(mode); setResult(null)
     if (name) writeSenderName(name)
     if (mode === 'test' && testTo) writeTestTo(testTo)
     try {
-      const r = await sendDailyLog(key, {
+      const r = await sendDailyLog({
         mode, logDate: log.date, sentBy: name, testTo: mode === 'test' ? testTo : undefined,
         again: mode === 'live' && again, resumeId, files: Object.fromEntries(kinds.map(k => [k, files[k]!])),
       })
@@ -126,7 +119,6 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
     : isTestPdf(files.log) ? 'This log was built in Test Mode. Turn Test Mode off and generate it again.'
     : !status ? 'Checking the email set-up…'
     : !cfg?.ready ? 'Sending is not set up on the host (see above).'
-    : !status?.keyOk ? 'Enter the desk key.'
     : !name.trim() ? 'Enter your name.'
     : active === 0 ? 'The distribution list has no active addresses.'
     : tooBig ? 'The attachments are over the size limit.'
@@ -136,8 +128,7 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
   const testBlock =
     !files.log ? 'Generate the log first.'
     : !status ? 'Checking the email set-up…'
-    : !cfg?.resend || !cfg?.deskKey ? 'Sending is not set up on the host (see above).'
-    : !status?.keyOk ? 'Enter the desk key.'
+    : !cfg?.resend ? 'Sending is not set up on the host (see above).'
     : !/^\S+@\S+\.\S+$/.test(testTo.trim()) ? 'Enter an address for the test.'
     : tooBig ? 'The attachments are over the size limit.'
     : null
@@ -166,27 +157,12 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
           <p className="text-red-400 text-sm font-semibold flex items-center gap-2"><AlertCircle size={14} /> Email sending is not set up on this deployment</p>
           <ul className="text-xs text-[#C9A0A0] list-disc pl-5 space-y-0.5">
             {!cfg.resend && <li><span className="font-mono">RESEND_API_KEY</span> is not set.</li>}
-            {!cfg.deskKey && <li><span className="font-mono">DISTRIBUTION_KEY</span> (the desk key) is not set.</li>}
             {!cfg.database && <li><span className="font-mono">SUPABASE_SERVICE_ROLE_KEY</span> is not set (the list is service-role only).</li>}
           </ul>
         </div>
       ) : null}
       {status?.error && cfg?.ready && (
         <div className="p-3 rounded bg-[rgba(192,57,43,0.1)] border border-[rgba(192,57,43,0.3)] text-red-400 text-xs">{status.error}</div>
-      )}
-
-      {/* Desk key */}
-      {cfg?.deskKey && !status?.keyOk && (
-        <div className="card p-4 space-y-2">
-          <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider flex items-center gap-2"><KeyRound size={12} /> Desk key</p>
-          <p className="text-xs text-[#7A8BA8]">Sending needs the desk key. It is kept in this browser once entered.{key && ' The key saved here was not accepted.'}</p>
-          <div className="flex gap-2">
-            <input type="password" value={keyDraft} onChange={e => setKeyDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveKey() }}
-              autoComplete="off" placeholder="Desk key"
-              className="flex-1 min-w-0 bg-[#0A0F1E] border border-[rgba(74,111,165,0.3)] rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-[#E05206]" />
-            <button onClick={saveKey} className="px-4 py-2 bg-[#E05206] text-white text-sm font-semibold rounded hover:bg-[#c4480a]">Save</button>
-          </div>
-        </div>
       )}
 
       {/* Already sent / part-sent */}

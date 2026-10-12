@@ -390,7 +390,9 @@ and checked, it emails:
 
 - **Subject:** `East Midlands Daily Control Log & 7 day look ahead`
 - **Body:** the template's layout: OFFICIAL marking, the Network Readiness
-  Statement banner, the greeting, the list of attachments (with the log date),
+  Statement banner, the greeting, the list of attachments (with the log date:
+  the log's 06:00 → 06:00 day, e.g. 03/10/2026 for a log sent early on 4 Oct,
+  the same date as the PDF's file name; a send where the two differ is refused),
   the Route Control Manager signature and the route strip. Both images are
   embedded inline. `lib/distribution/emailTemplate.ts` holds it; the Send step
   shows a live preview.
@@ -398,20 +400,22 @@ and checked, it emails:
   into DLog2, and the log PDF exactly as downloaded. A forecast taken from the
   shared store (no PDF) or a reload clears a file; the Send step then asks for
   it, and a live send without one needs a tick.
-- **Recipients:** To the control mailbox (`Control.Derby@networkrail.co.uk`),
+- **Recipients:** To the old RCM mailbox (`CS-LNE-DER-01A@networkrail.co.uk`),
   the whole distribution list by **BCC**, so no-one can reply to all. Resend
   takes 50 addresses per email, so the list goes as several identical emails
-  of 49 BCC each (331 addresses = 7 emails; the To mailbox receives each).
-  Reply-To is the control mailbox; the sender is `Derby Control
-  <dailylog@derbycontrol.co.uk>`.
+  of 49 BCC + the To (332 addresses = 7 emails). The To mailbox receives every
+  one of them, which is why it is the old RCM inbox; the current control
+  mailbox (`Control.Derby@networkrail.co.uk`) is an ordinary entry on the list
+  and receives one copy. Reply-To is `Control.Derby@networkrail.co.uk`; the
+  sender is `Derby Control <dailylog@derbycontrol.co.uk>`.
 
 Safeguards:
 
 - **Test send** to one address (subject `[TEST] …`, a banner naming the live
   recipients count) is always available. In Test Mode, or with a `_TEST` PDF,
   only test sends are possible.
-- **Desk key.** Every send and every list change needs `DISTRIBUTION_KEY`,
-  entered once per browser. Without it set on the host, sending is off.
+- **No login.** Like the rest of DLog2, the Send step and the list page are
+  open to anyone who has the URL; treat the URL as need-to-know.
 - **Once per log date.** A second live send for the same date is refused
   unless "send again" is ticked; two desks pressing Send together, the first
   wins.
@@ -429,7 +433,6 @@ Set-up (Vercel → `d-log2` → Environment variables, then redeploy):
 
 ```
 RESEND_API_KEY            = re_…            # derbycontrol.co.uk domain, sending access
-DISTRIBUTION_KEY          = <desk key>      # shared with the desk; rotate if it leaks
 SUPABASE_SERVICE_ROLE_KEY = …               # the list and sends are service-role only
 DISTRIBUTION_FROM / DISTRIBUTION_TO / DISTRIBUTION_REPLY_TO   # optional overrides
 ```

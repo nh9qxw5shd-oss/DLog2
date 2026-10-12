@@ -41,6 +41,12 @@ export function ukDate(iso: string): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : iso
 }
 
+/** EMCC_Daily_Report_20261003.pdf (or _TEST.pdf) → 2026-10-03; null for any other name. */
+export function logDateInFilename(name: string): string | null {
+  const m = /EMCC_Daily_Report_(\d{4})(\d{2})(\d{2})(?:_TEST)?\.pdf$/i.exec(name)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null
+}
+
 export function subjectFor(c: { test?: EmailContent['test'] }): string {
   return c.test ? `[TEST] ${SUBJECT}` : SUBJECT
 }

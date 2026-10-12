@@ -4,20 +4,19 @@
 // The addresses the daily log is emailed to (BCC) from the Send step. Paste an
 // Outlook To line or one address per line to add; pause an address to keep it
 // on the list without sending to it; edit or remove. Every change is live and
-// needs the desk key. Also shows the recent send history.
+// Also shows the recent send history.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
-  AlertCircle, ArrowLeft, Check, Copy, KeyRound, Loader2, Pause, Pencil, Play, Plus, Search, Trash2, X,
+  AlertCircle, ArrowLeft, Check, Copy, Loader2, Pause, Pencil, Play, Plus, Search, Trash2, X,
 } from 'lucide-react'
 import {
-  readDeskKey, writeDeskKey, readSenderName, writeSenderName, fetchRecipients, addRecipients, updateRecipient,
-  removeRecipient, Recipient, PublicSend, DESK_KEY_STORAGE,
+  readSenderName, writeSenderName, fetchRecipients, addRecipients, updateRecipient,
+  removeRecipient, Recipient, PublicSend,
 } from '@/lib/distribution/client'
 import { formatAddressList } from '@/lib/distribution/addresses'
 import { ukDate } from '@/lib/distribution/emailTemplate'
-import { subscribeStorageKey } from '@/lib/storageSync'
 
 function cn(...cls: (string | false | undefined | null)[]) {
   return cls.filter(Boolean).join(' ')
@@ -27,13 +26,10 @@ const input = 'bg-[#0A0F1E] border border-[rgba(74,111,165,0.3)] rounded px-3 py
 const when = (iso: string) => new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })
 
 export default function DistributionPage() {
-  const [key, setKey] = useState('')
-  const [keyDraft, setKeyDraft] = useState('')
   const [by, setBy] = useState('')
   const [list, setList] = useState<Recipient[] | null>(null)
   const [sends, setSends] = useState<PublicSend[]>([])
   const [error, setError] = useState('')
-  const [needKey, setNeedKey] = useState(false)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [paste, setPaste] = useState('')
@@ -44,24 +40,20 @@ export default function DistributionPage() {
   const [busyId, setBusyId] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
 
-  const load = useCallback(async (k: string) => {
+  const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const r = await fetchRecipients(k)
-      setList(r.recipients); setSends(r.sends); setNeedKey(false)
+      const r = await fetchRecipients()
+      setList(r.recipients); setSends(r.sends)
     } catch (e: any) {
-      if (e?.status === 401) { setNeedKey(true); setList(null) }
-      else setError(e?.message || 'Could not load the list')
+      setError(e?.message || 'Could not load the list')
     } finally { setLoading(false) }
   }, [])
 
   useEffect(() => {
-    const k = readDeskKey(); setKey(k); setKeyDraft(k); setBy(readSenderName())
-    load(k)
-    return subscribeStorageKey(DESK_KEY_STORAGE, v => { setKey(v ?? ''); setKeyDraft(v ?? ''); load(v ?? '') })
+    setBy(readSenderName())
+    load()
   }, [load])
-
-  const saveKey = () => { writeDeskKey(keyDraft); setKey(keyDraft.trim()); load(keyDraft.trim()) }
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -73,7 +65,7 @@ export default function DistributionPage() {
 
   const act = async (id: number, fn: () => Promise<unknown>) => {
     setBusyId(id); setError('')
-    try { await fn(); await load(key) }
+    try { await fn(); await load() }
     catch (e: any) { setError(e?.message || 'Change failed') }
     finally { setBusyId(null) }
   }
@@ -82,14 +74,14 @@ export default function DistributionPage() {
     setAdding(true); setAddMsg(''); setError('')
     if (by) writeSenderName(by)
     try {
-      const r = await addRecipients(key, paste, by)
+      const r = await addRecipients(paste, by)
       const bits = [`${r.added} added`]
       if (r.alreadyListed) bits.push(`${r.alreadyListed} already on the list`)
       if (r.duplicatesInPaste) bits.push(`${r.duplicatesInPaste} repeated in the paste`)
       if (r.invalid.length) bits.push(`${r.invalid.length} not valid: ${r.invalid.slice(0, 5).join(', ')}${r.invalid.length > 5 ? '…' : ''}`)
       setAddMsg(bits.join(' · '))
       if (r.added) setPaste('')
-      await load(key)
+      await load()
     } catch (e: any) { setError(e?.message || 'Could not add') }
     finally { setAdding(false) }
   }
@@ -135,17 +127,7 @@ export default function DistributionPage() {
           </div>
         )}
 
-        {needKey ? (
-          <div className="card p-4 space-y-2 max-w-md">
-            <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider flex items-center gap-2"><KeyRound size={12} /> Desk key</p>
-            <p className="text-xs text-[#7A8BA8]">The list holds people&apos;s names and addresses, so it needs the desk key.{key && ' The key saved here was not accepted.'}</p>
-            <div className="flex gap-2">
-              <input type="password" value={keyDraft} onChange={e => setKeyDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveKey() }}
-                autoComplete="off" placeholder="Desk key" className={cn(input, 'flex-1 min-w-0')} />
-              <button onClick={saveKey} className="px-4 py-2 bg-[#E05206] text-white text-sm font-semibold rounded hover:bg-[#c4480a]">Open</button>
-            </div>
-          </div>
-        ) : loading && !list ? (
+        {loading && !list ? (
           <div className="card p-4 flex items-center gap-2 text-sm text-[#7A8BA8]"><Loader2 size={14} className="animate-spin" /> Loading the list…</div>
         ) : list && (
           <>
@@ -188,7 +170,7 @@ export default function DistributionPage() {
                       <div className="flex-1 min-w-0 flex gap-2 flex-wrap">
                         <input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} placeholder="Name" className={cn(input, 'py-1 flex-1 min-w-[8rem]')} />
                         <input value={editing.email} onChange={e => setEditing({ ...editing, email: e.target.value })} placeholder="Email" className={cn(input, 'py-1 flex-[2] min-w-[12rem]')} />
-                        <button onClick={() => act(r.id, () => updateRecipient(key, r.id, { name: editing.name || null, email: editing.email }).then(() => setEditing(null)))}
+                        <button onClick={() => act(r.id, () => updateRecipient(r.id, { name: editing.name || null, email: editing.email }).then(() => setEditing(null)))}
                           className="p-1.5 text-[#27AE60] hover:text-white" title="Save"><Check size={14} /></button>
                         <button onClick={() => setEditing(null)} className="p-1.5 text-[#7A8BA8] hover:text-white" title="Cancel"><X size={14} /></button>
                       </div>
@@ -202,13 +184,13 @@ export default function DistributionPage() {
                       <div className="flex items-center gap-1 shrink-0">
                         {busyId === r.id ? <Loader2 size={14} className="animate-spin text-[#7A8BA8]" /> : confirmRemove === r.id ? (
                           <>
-                            <button onClick={() => act(r.id, () => removeRecipient(key, r.id)).then(() => setConfirmRemove(null))}
+                            <button onClick={() => act(r.id, () => removeRecipient(r.id)).then(() => setConfirmRemove(null))}
                               className="px-2 py-1 text-xs rounded bg-[rgba(192,57,43,0.2)] text-red-400 hover:bg-[rgba(192,57,43,0.35)]">Remove</button>
                             <button onClick={() => setConfirmRemove(null)} className="p-1.5 text-[#7A8BA8] hover:text-white" title="Keep"><X size={14} /></button>
                           </>
                         ) : (
                           <>
-                            <button onClick={() => act(r.id, () => updateRecipient(key, r.id, { active: !r.active }))}
+                            <button onClick={() => act(r.id, () => updateRecipient(r.id, { active: !r.active }))}
                               className="p-1.5 text-[#7A8BA8] hover:text-white" title={r.active ? 'Pause: keep on the list but do not send' : 'Resume sending'}>
                               {r.active ? <Pause size={14} /> : <Play size={14} />}
                             </button>

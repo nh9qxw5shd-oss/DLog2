@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseAddressList, formatAddressList, isValidEmail } from './addresses.ts'
 import {
-  renderHtml, renderText, subjectFor, batches, ukDate, checkAttachment, safeFilename, SUBJECT, BCC_PER_EMAIL,
+  renderHtml, renderText, subjectFor, batches, ukDate, checkAttachment, safeFilename, logDateInFilename, SUBJECT, BCC_PER_EMAIL,
 } from './emailTemplate.ts'
 
 test('parses an Outlook To line with quoted, wrapped and comma-containing names', () => {
@@ -87,4 +87,15 @@ test('attachments are checked by extension and leading bytes', () => {
   assert.match(checkAttachment('forecast', 'forecast.docx', zip) ?? '', /not a \.pdf/)
   assert.equal(safeFilename('C:\\x\\East Midlands 7 Day Forecast - 04-10-2026 0234 BST.pdf', 'f.pdf'), 'East Midlands 7 Day Forecast - 04-10-2026 0234 BST.pdf')
   assert.equal(safeFilename('', 'f.pdf'), 'f.pdf')
+})
+
+test('body date steps with the log date and matches the PDF built for it', () => {
+  const img = (k: string) => `cid:${k}`
+  // A log sent on the morning of 4 Oct covers the 06:00 3 Oct → 06:00 4 Oct day.
+  for (const [logDate, shown] of [['2026-10-03', '03/10/2026'], ['2026-10-04', '04/10/2026'], ['2026-12-31', '31/12/2026'], ['2027-01-01', '01/01/2027']]) {
+    assert.match(renderHtml({ logDate, attachments: ['log'] }, img), new RegExp(`East Midlands Route ${shown.replace(/\//g, '\\/')}\\.`))
+    assert.equal(logDateInFilename(`EMCC_Daily_Report_${logDate.replace(/-/g, '')}.pdf`), logDate)
+  }
+  assert.equal(logDateInFilename('EMCC_Daily_Report_20261003_TEST.pdf'), '2026-10-03')
+  assert.equal(logDateInFilename('something.pdf'), null)
 })

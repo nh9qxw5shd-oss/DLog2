@@ -2,7 +2,7 @@
 // Sends the daily log email through Resend. Called from the Send step once the
 // operator has checked the generated log.
 //
-// POST multipart/form-data, header x-distribution-key: <desk key>
+// POST multipart/form-data
 //   mode      'test' | 'live'
 //   logDate   YYYY-MM-DD
 //   sentBy    operator name (stamped on the send record)
@@ -13,7 +13,8 @@
 //   forecast  the Route 7 Day Forecast PDF dropped into DLog2 (optional)
 //   ccil      the CCIL .docx export dropped into DLog2 (optional)
 //
-// Live: To is the control mailbox, the whole list goes by BCC, 49 per email
+// Live: To is the old RCM mailbox (it receives every email of the batch); the
+// list, the control mailbox included, goes by BCC, 49 per email
 // (Resend allows 50 addresses per email). Each email that Resend accepts is
 // recorded before the next goes, so a failure part-way can be resumed without
 // sending anyone a second copy. A second live send for the same log date is
@@ -25,11 +26,11 @@ import { createHash } from 'crypto'
 import { emailKey, isValidEmail } from '@/lib/distribution/addresses'
 import {
   AttachmentKind, FILE_ORDER, ATTACHMENT_RULES, MAX_TOTAL_BYTES, BCC_PER_EMAIL,
-  renderHtml, renderText, subjectFor, batches, safeFilename, checkAttachment,
+  renderHtml, renderText, subjectFor, batches, safeFilename, checkAttachment, logDateInFilename, ukDate,
 } from '@/lib/distribution/emailTemplate'
 import { BANNER, SIGNATURE } from '@/lib/distribution/emailImages'
 import {
-  config, keyOk, db, activeAddresses, sendsFor, getSend, createSend, updateSend, resendSend,
+  config, db, activeAddresses, sendsFor, getSend, createSend, updateSend, resendSend,
   publicSend, DistributionError, ResendAttachment, SendRecord,
 } from '@/lib/distribution/server'
 
@@ -52,8 +53,6 @@ function isLiveInProgressOrDone(s: SendRecord): boolean {
 
 export async function POST(req: NextRequest) {
   const c = config()
-  if (!c.deskKey) return fail('Sending is switched off: DISTRIBUTION_KEY is not set on the host.', 503)
-  if (!keyOk(req.headers.get('x-distribution-key'), c)) return fail('The desk key is missing or wrong.', 401)
   if (!c.resendKey) return fail('Sending is not set up: RESEND_API_KEY is not set on the host.', 503)
 
   let form: FormData
@@ -83,6 +82,12 @@ export async function POST(req: NextRequest) {
   if (!files.some(f => f.kind === 'log')) return fail('The generated log PDF is missing.', 400)
   if (total > MAX_TOTAL_BYTES) return fail(`The attachments come to ${(total / 1048576).toFixed(1)} MB; the limit is ${MAX_TOTAL_BYTES / 1048576} MB.`, 413)
   const logFile = files.find(f => f.kind === 'log')!
+  // The body's date and the PDF are both the log's 06:00 → 06:00 day; refuse a
+  // send where they disagree (e.g. a PDF left over from another day's build).
+  const pdfDate = logDateInFilename(logFile.filename)
+  if (pdfDate && pdfDate !== logDate) {
+    return fail(`The log PDF is for ${ukDate(pdfDate)} but this log is ${ukDate(logDate)}. Generate the log again.`, 400)
+  }
   if (mode === 'live' && /_TEST\.pdf$/i.test(logFile.filename)) {
     return fail('This log was built in Test Mode. Turn Test Mode off and generate it again before sending to the list.', 400)
   }

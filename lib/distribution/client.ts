@@ -31,9 +31,8 @@ export function subscribeSourceFiles(l: Listener): () => void {
   return () => { listeners.delete(l) }
 }
 
-// ── Desk key and sender name (per browser) ────────────────────────────────────
+// ── Sender name (per browser) ─────────────────────────────────────────────────
 
-const KEY_KEY = 'dlog2:distribution-key'
 const NAME_KEY = 'dlog2:distribution-name'
 
 function read(k: string): string {
@@ -43,17 +42,14 @@ function write(k: string, v: string): void {
   try { if (v) window.localStorage.setItem(k, v); else window.localStorage.removeItem(k) } catch { /* private mode */ }
 }
 
-export const readDeskKey = () => read(KEY_KEY)
-export const writeDeskKey = (v: string) => write(KEY_KEY, v.trim())
 export const readSenderName = () => read(NAME_KEY)
 export const writeSenderName = (v: string) => write(NAME_KEY, v.trim())
-export const DESK_KEY_STORAGE = KEY_KEY
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export interface PublicConfig {
   from: string; to: string; replyTo: string
-  resend: boolean; deskKey: boolean; database: boolean; ready: boolean
+  resend: boolean; database: boolean; ready: boolean
 }
 
 export interface PublicSend {
@@ -74,7 +70,6 @@ export interface PublicSend {
 
 export interface DistributionStatus {
   config: PublicConfig
-  keyOk: boolean
   activeCount?: number
   sends?: PublicSend[]
   error?: string
@@ -85,10 +80,8 @@ export interface Recipient {
   addedAt: string; addedBy: string | null; updatedAt: string
 }
 
-async function call<T>(path: string, init: RequestInit = {}, key?: string): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (key) headers.set('x-distribution-key', key)
-  const res = await fetch(withBase(path), { ...init, headers, cache: 'no-store' })
+async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(withBase(path), { ...init, cache: 'no-store' })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
     const err = new Error(body?.error || `Request failed (${res.status})`) as Error & { status?: number; body?: any }
@@ -98,28 +91,28 @@ async function call<T>(path: string, init: RequestInit = {}, key?: string): Prom
   return body as T
 }
 
-export function fetchDistributionStatus(logDate: string, key: string): Promise<DistributionStatus> {
-  return call(`/api/distribution?date=${encodeURIComponent(logDate)}`, {}, key)
+export function fetchDistributionStatus(logDate: string): Promise<DistributionStatus> {
+  return call(`/api/distribution?date=${encodeURIComponent(logDate)}`)
 }
 
-export function fetchRecipients(key: string): Promise<{ recipients: Recipient[]; sends: PublicSend[] }> {
-  return call('/api/distribution/recipients', {}, key)
+export function fetchRecipients(): Promise<{ recipients: Recipient[]; sends: PublicSend[] }> {
+  return call('/api/distribution/recipients')
 }
 
-export function addRecipients(key: string, text: string, by: string) {
+export function addRecipients(text: string, by: string) {
   return call<{ added: number; alreadyListed: number; duplicatesInPaste: number; invalid: string[] }>(
     '/api/distribution/recipients',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, by }) }, key)
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, by }) })
 }
 
-export function updateRecipient(key: string, id: number, patch: { email?: string; name?: string | null; active?: boolean }) {
+export function updateRecipient(id: number, patch: { email?: string; name?: string | null; active?: boolean }) {
   return call<{ ok: true }>('/api/distribution/recipients',
-    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ...patch }) }, key)
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ...patch }) })
 }
 
-export function removeRecipient(key: string, id: number) {
+export function removeRecipient(id: number) {
   return call<{ ok: true }>('/api/distribution/recipients',
-    { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }, key)
+    { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
 }
 
 export interface SendResult {
@@ -127,7 +120,7 @@ export interface SendResult {
   sent?: number; total?: number; emails?: number; error?: string; previous?: PublicSend[]
 }
 
-export async function sendDailyLog(key: string, opts: {
+export async function sendDailyLog(opts: {
   mode: 'test' | 'live'
   logDate: string
   sentBy: string
@@ -147,7 +140,7 @@ export async function sendDailyLog(key: string, opts: {
     if (f) fd.set(kind, f, (f as File).name || kind)
   }
   const res = await fetch(withBase('/api/distribution/send'), {
-    method: 'POST', headers: { 'x-distribution-key': key }, body: fd, cache: 'no-store',
+    method: 'POST', body: fd, cache: 'no-store',
   })
   const body = await res.json().catch(() => ({ ok: false, error: `Send failed (${res.status})` }))
   return { ...body, ok: !!body.ok && res.ok }
