@@ -208,7 +208,7 @@ function UploadStep({ onComplete, testMode }: {
   const [progress, setProgress] = useState('')
   const [error, setError]       = useState('')
   const [parsed, setParsed]     = useState<{ data: Partial<LogState>; rawText: string } | null>(null)
-  const [fcState, setFcState]   = useState<{ status: 'idle' | 'parsing' | 'done' | 'error'; result?: ForecastImportResult; notes?: string[]; error?: string }>({ status: 'idle' })
+  const [fcState, setFcState]   = useState<{ status: 'idle' | 'parsing' | 'done' | 'error'; result?: ForecastImportResult; file?: File; notes?: string[]; error?: string }>({ status: 'idle' })
   const inputRef = useRef<HTMLInputElement>(null)
 
   const htmlToTableText = useCallback((html: string): string => {
@@ -264,7 +264,6 @@ function UploadStep({ onComplete, testMode }: {
       const period = header.period
 
       setProgress(`Done — ${incidents.length} incidents extracted`)
-      setSourceFile('ccil', f)   // attached to the distribution email as the raw CCIL export
       setParsed({ data: { period, date, dateSource, createdBy, incidents, rawLogText: rawText }, rawText })
     } catch (e: any) {
       setError(e.message || 'Parse failed')
@@ -279,8 +278,7 @@ function UploadStep({ onComplete, testMode }: {
     try {
       const result = await importForecastFile(f, { testMode })
       const applied = applyForecast(result.forecast, todayIsoLocal())
-      setSourceFile('forecast', f)   // attached to the distribution email
-      setFcState({ status: 'done', result, notes: applied.notes })
+      setFcState({ status: 'done', result, file: f, notes: applied.notes })
     } catch (e: any) {
       setFcState({ status: 'error', error: e?.message || 'Forecast parse failed' })
     }
@@ -309,7 +307,15 @@ function UploadStep({ onComplete, testMode }: {
     return { lookAheadWeather: applied.weather, forecast: fcState.result.forecast, forecastFileName: fcState.result.fileName }
   }
 
-  const proceed = () => { if (parsed) onComplete({ ...parsed.data, ...forecastPatch() }, parsed.rawText) }
+  // The email attaches the files of THIS upload only: anything from an earlier
+  // log in the same page (a tab left open overnight) is replaced or cleared, so
+  // yesterday's forecast can never go out with today's log.
+  const recordSourceFiles = (withCcil: boolean) => {
+    setSourceFile('ccil', withCcil && parsed ? file : null)
+    setSourceFile('forecast', fcState.status === 'done' ? fcState.file ?? null : null)
+  }
+
+  const proceed = () => { if (parsed) { recordSourceFiles(true); onComplete({ ...parsed.data, ...forecastPatch() }, parsed.rawText) } }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -400,7 +406,7 @@ function UploadStep({ onComplete, testMode }: {
         <p className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider">Or start blank (manual entry)</p>
         <button
           className="w-full py-2 px-4 border border-[rgba(74,111,165,0.4)] text-[#4A6FA5] text-sm rounded hover:bg-[rgba(74,111,165,0.1)] transition-colors"
-          onClick={() => onComplete(forecastPatch(), '')}
+          onClick={() => { recordSourceFiles(false); onComplete(forecastPatch(), '') }}
         >Start with empty log{fcState.status === 'done' ? ' (keeping the forecast)' : ''}</button>
       </div>
     </div>

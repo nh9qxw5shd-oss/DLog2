@@ -149,6 +149,7 @@ export interface SendRecord {
   sentBy: string | null
   toAddress: string | null
   attachments: string[]
+  attachmentHashes: string[]   // "kind:sha256" per file; a resume must carry the same set
   recipientCount: number
   sentCount: number
   sentTo: string[]
@@ -162,7 +163,7 @@ function toSend(r: any): SendRecord {
   const sentTo: string[] = r.sent_to ?? []
   return {
     id: r.id, logDate: r.log_date, isTest: !!r.is_test, status: r.status, sentBy: r.sent_by ?? null,
-    toAddress: r.to_address ?? null, attachments: r.attachments ?? [], recipientCount: r.recipient_count ?? 0,
+    toAddress: r.to_address ?? null, attachments: r.attachments ?? [], attachmentHashes: r.attachment_hashes ?? [], recipientCount: r.recipient_count ?? 0,
     sentCount: sentTo.length, sentTo, resendIds: r.resend_ids ?? [], error: r.error ?? null,
     createdAt: r.created_at, finishedAt: r.finished_at ?? null,
   }
@@ -170,7 +171,7 @@ function toSend(r: any): SendRecord {
 
 /** The send history without addresses, for the browser. */
 export function publicSend(s: SendRecord) {
-  const { sentTo, resendIds, ...rest } = s
+  const { sentTo, resendIds, attachmentHashes, ...rest } = s
   return { ...rest, emails: resendIds.length }
 }
 
@@ -182,6 +183,16 @@ export async function sendsFor(sb: SupabaseClient, logDate: string | null, limit
   return (data ?? []).map(toSend)
 }
 
+/** Every live send for the date that is sent, part-sent or still going: the
+ *  once-per-date guard. Unlimited, so test sends can never push one out of view. */
+export async function liveSendsFor(sb: SupabaseClient, logDate: string): Promise<SendRecord[]> {
+  const { data, error } = await sb.from('dlog2_distribution_sends').select('*')
+    .eq('log_date', logDate).eq('is_test', false).in('status', ['sending', 'sent', 'partial'])
+    .order('created_at', { ascending: false })
+  if (error) wrap('Could not read the send history', error.message)
+  return (data ?? []).map(toSend)
+}
+
 export async function getSend(sb: SupabaseClient, id: number): Promise<SendRecord | null> {
   const { data, error } = await sb.from('dlog2_distribution_sends').select('*').eq('id', id).maybeSingle()
   if (error) wrap('Could not read the send', error.message)
@@ -189,11 +200,12 @@ export async function getSend(sb: SupabaseClient, id: number): Promise<SendRecor
 }
 
 export async function createSend(sb: SupabaseClient, row: {
-  logDate: string; isTest: boolean; sentBy: string | null; subject: string; toAddress: string; attachments: string[]; recipientCount: number
+  logDate: string; isTest: boolean; sentBy: string | null; subject: string; toAddress: string; attachments: string[]; attachmentHashes: string[]; recipientCount: number
 }): Promise<SendRecord> {
   const { data, error } = await sb.from('dlog2_distribution_sends').insert({
     log_date: row.logDate, is_test: row.isTest, sent_by: row.sentBy, subject: row.subject,
-    to_address: row.toAddress, attachments: row.attachments, recipient_count: row.recipientCount, status: 'sending',
+    to_address: row.toAddress, attachments: row.attachments, attachment_hashes: row.attachmentHashes,
+    recipient_count: row.recipientCount, status: 'sending',
   }).select('*').single()
   if (error) wrap('Could not record the send', error.message)
   return toSend(data)
