@@ -41,9 +41,14 @@ host serves the same build under `/log` too (`dlog2.derbycontrol.co.uk/log`).
 5. **Generate** — jsPDF builds the report in-browser → download PDF. When NRSDB
    credentials are configured, this step also pulls the route's imposed ESRs
    (see below) before the PDF is built.
+6. **Send** — after checking the downloaded log, email it to the distribution
+   list through Resend with the forecast PDF and the CCIL export attached
+   (see "Distributing the daily log" below).
 
-CCIL data never leaves the browser. Incident data and ESR snapshots are written
-to Supabase only when those integrations are configured.
+CCIL parsing happens in the browser. The CCIL export leaves the browser only
+when the operator sends the log: it is then attached to the email, passing
+through this deployment's server and Resend. Incident data and ESR snapshots
+are written to Supabase only when those integrations are configured.
 
 ---
 
@@ -149,8 +154,8 @@ No `.env` file needed.
 
 ## Security Notes
 
-- CCIL parsing and PDF generation are fully client-side — CCIL data never leaves the user's browser
-- The only server code is the ESR route handler; NRSDB credentials live in server-only env vars and are never sent to the browser
+- CCIL parsing and PDF generation are client-side. The Send step uploads the log PDF, the forecast and the CCIL export to `/api/distribution/send`, which hands them to Resend (EU region, `derbycontrol.co.uk`); nothing is stored server-side beyond the send record (file names, counts, addresses reached)
+- Server code: the ESR route handlers and the distribution routes; NRSDB credentials, the Resend key and the desk key live in server-only env vars and are never sent to the browser
 - Add Vercel Password Protection (Pro plan) for access control
 - Mark your Vercel deployment as OFFICIAL-SENSITIVE and restrict access
 
@@ -378,6 +383,61 @@ There is no login on the register page, the same as the rest of the app.
 The only thing keeping maintenance out of the log workflow is that the
 register page does not link to it — treat the main DLog2 URL as need-to-know.
 
+## Distributing the daily log
+
+Step 5, **Send**, replaces the Outlook template. Once the log has been generated
+and checked, it emails:
+
+- **Subject:** `East Midlands Daily Control Log & 7 day look ahead`
+- **Body:** the template's layout: OFFICIAL marking, the Network Readiness
+  Statement banner, the greeting, the list of attachments (with the log date),
+  the Route Control Manager signature and the route strip. Both images are
+  embedded inline. `lib/distribution/emailTemplate.ts` holds it; the Send step
+  shows a live preview.
+- **Attachments:** the forecast PDF and the CCIL `.docx` exactly as dropped
+  into DLog2, and the log PDF exactly as downloaded. A forecast taken from the
+  shared store (no PDF) or a reload clears a file; the Send step then asks for
+  it, and a live send without one needs a tick.
+- **Recipients:** To the control mailbox (`Control.Derby@networkrail.co.uk`),
+  the whole distribution list by **BCC**, so no-one can reply to all. Resend
+  takes 50 addresses per email, so the list goes as several identical emails
+  of 49 BCC each (331 addresses = 7 emails; the To mailbox receives each).
+  Reply-To is the control mailbox; the sender is `Derby Control
+  <dailylog@derbycontrol.co.uk>`.
+
+Safeguards:
+
+- **Test send** to one address (subject `[TEST] …`, a banner naming the live
+  recipients count) is always available. In Test Mode, or with a `_TEST` PDF,
+  only test sends are possible.
+- **Desk key.** Every send and every list change needs `DISTRIBUTION_KEY`,
+  entered once per browser. Without it set on the host, sending is off.
+- **Once per log date.** A second live send for the same date is refused
+  unless "send again" is ticked; two desks pressing Send together, the first
+  wins.
+- **Resumable.** Each email Resend accepts is recorded before the next goes.
+  If a send stops part-way, the Send step offers to send to the addresses not
+  yet reached; nobody receives two copies.
+- **Confirmation** before a live send, and the operator's name is recorded.
+
+**Distribution list** (`/log/distribution`, header link "Distribution"): paste
+an Outlook To line or one address per line to add (duplicates, any case, are
+ignored); pause an address to keep it without sending; edit; remove; copy the
+active list as an Outlook line (a fallback if email is down); recent sends.
+
+Set-up (Vercel → `d-log2` → Environment variables, then redeploy):
+
+```
+RESEND_API_KEY            = re_…            # derbycontrol.co.uk domain, sending access
+DISTRIBUTION_KEY          = <desk key>      # shared with the desk; rotate if it leaks
+SUPABASE_SERVICE_ROLE_KEY = …               # the list and sends are service-role only
+DISTRIBUTION_FROM / DISTRIBUTION_TO / DISTRIBUTION_REPLY_TO   # optional overrides
+```
+
+Database: `supabase/migrations/015_distribution.sql` (tables
+`dlog2_distribution_recipients`, `dlog2_distribution_sends`; RLS with no
+policies). Tests for the list parser and template: `npm test`.
+
 ## Modifying the PDF
 
 Edit `lib/pdfGenerator.ts` — sections are clearly commented.
@@ -400,8 +460,11 @@ emcc-daily-log/
 │   ├── api/esr/keepalive/route.ts← pg_cron target: pull with the stored session every 5 min (server)
 │   ├── globals.css
 │   ├── layout.tsx
+│   ├── api/distribution/         ← status, send (Resend), recipients CRUD, email preview (server)
+│   ├── distribution/page.tsx ← distribution list management
 │   ├── out-of-use/page.tsx ← standalone Out of Use register (maintenance-facing, no link back)
-│   └── page.tsx          ← Full app (upload → roster → review → generate)
+│   ├── SendStep.tsx      ← step 5: send the log to the distribution list
+│   └── page.tsx          ← Full app (upload → roster → review → generate → send)
 ├── scripts/
 │   └── nrsdb_push.py      ← pull from NRSDB on an allowed PC → POST /api/esr/ingest
 ├── lib/
@@ -410,6 +473,7 @@ emcc-daily-log/
 │   ├── pdfGenerator.ts    ← jsPDF report builder
 │   ├── esrClient.ts       ← browser wrapper for /api/esr/snapshot
 │   ├── outOfUse.ts        ← Out of Use register: types, section specs, Supabase CRUD + local fallback
+│   ├── distribution/      ← address parsing, email template + images, browser client, server store/Resend
 │   └── esr/
 │       ├── types.ts       ← shared ESR types
 │       ├── refnum.ts      ← "EM 061C.26" → base ref + revision rank

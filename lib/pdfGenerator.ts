@@ -121,7 +121,7 @@ export async function generatePDF(
   categorySettings?: CategorySettings,
   esr?: EsrSnapshotResponse | null,
   options: { testMode?: boolean; outOfUse?: (OouRegister & { error?: string }) | null } = {},
-): Promise<void> {
+): Promise<File> {
   const testMode    = !!options.testMode
   const outOfUse    = options.outOfUse ?? null
   const { jsPDF }   = await import('jspdf')
@@ -1496,8 +1496,12 @@ export async function generatePDF(
 
   // ── Save ───────────────────────────────────────────────────────────────────
 
+  // Downloaded for the operator to check, and returned so the Send step can
+  // attach the same file to the distribution email.
   const dateStr = log.date ? log.date.replace(/-/g, '') : 'unknown'
-  doc.save(`EMCC_Daily_Report_${dateStr}${testMode ? '_TEST' : ''}.pdf`)
+  const fileName = `EMCC_Daily_Report_${dateStr}${testMode ? '_TEST' : ''}.pdf`
+  doc.save(fileName)
+  return new File([doc.output('blob')], fileName, { type: 'application/pdf' })
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
