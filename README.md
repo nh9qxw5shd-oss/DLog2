@@ -385,8 +385,12 @@ register page does not link to it — treat the main DLog2 URL as need-to-know.
 
 ## Distributing the daily log
 
-Step 5, **Send**, replaces the Outlook template. Once the log has been generated
-and checked, it emails:
+Step 5, **Send**, replaces the Outlook template. Generating the log moves
+straight on to Send, which opens with a **NOT SENT YET** banner (open the PDF,
+check it, then send). Until the log has gone to the list, the Send pill on the
+step bar pulses amber, a pinned bar on every other step says it has not been
+sent, and the browser asks before the page is closed or left (not in Test
+Mode). Once checked, it emails:
 
 - **Subject:** `East Midlands Daily Control Log & 7 day look ahead`
 - **Body:** the template's layout: OFFICIAL marking, the Network Readiness

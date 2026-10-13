@@ -35,7 +35,7 @@ import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRS
 import { withBase } from '@/lib/basePath'
 import { useTestMode } from '@/lib/testMode'
 import { fetchOutOfUseRegister, subscribeLocalRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
-import { setSourceFile } from '@/lib/distribution/client'
+import { setSourceFile, getSourceFiles, subscribeSourceFiles } from '@/lib/distribution/client'
 import { SendStep } from './SendStep'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────────
@@ -105,12 +105,18 @@ const STEPS = [
   { id: 5, label: 'Send',          icon: Send     },
 ]
 
-function StepBar({ current }: { current: number }) {
+/** Send's state for the step bar: generated but not sent is flagged until it goes. */
+type SendState = 'none' | 'pending' | 'sent'
+
+function StepBar({ current, send }: { current: number; send: SendState }) {
   return (
     <div className="flex items-center">
       {STEPS.map((step, i) => {
         const Icon = step.icon
-        const status = current > step.id ? 'complete' : current === step.id ? 'active' : 'inactive'
+        const status = step.id === 5 && send === 'sent' ? 'complete'
+          : current === step.id ? 'active'
+          : step.id === 5 && send === 'pending' ? 'pending'
+          : current > step.id ? 'complete' : 'inactive'
         return (
           <div key={step.id} className="flex items-center">
             <div className={cn(
@@ -118,7 +124,8 @@ function StepBar({ current }: { current: number }) {
               status === 'active'   && 'bg-[#E05206] text-white',
               status === 'complete' && 'bg-[#27AE60] text-white',
               status === 'inactive' && 'bg-[#131C35] text-[#7A8BA8] border border-[rgba(74,111,165,0.25)]',
-            )}>
+              status === 'pending'  && 'bg-[#F39C12] text-[#0F1729] animate-pulse',
+            )} title={status === 'pending' ? 'The log has been generated but not sent to the distribution list' : undefined}>
               <Icon size={14} />
               <span className="hidden sm:inline">{step.label}</span>
               <span className="font-mono text-xs opacity-60">0{step.id}</span>
@@ -1838,7 +1845,13 @@ function EsrCard({ esr, loading, fresh, skipped, testMode, onSkip, onUnskip, onP
 
 // ─── Step 4: Generate ───────────────────────────────────────────────────────────
 
-function GenerateStep({ log, onBack, onNext, testMode }: { log: LogState; onBack: () => void; onNext: () => void; testMode: boolean }) {
+function GenerateStep({ log, onBack, onNext, testMode }: {
+  log: LogState
+  onBack: () => void
+  /** Called (and goes to Send) as soon as the PDF is built, so the send is never skipped. */
+  onNext: () => void
+  testMode: boolean
+}) {
   const [generating, setGenerating] = useState(false)
   const [done, setDone]             = useState(false)
   const [error, setError]           = useState('')
@@ -1930,6 +1943,7 @@ function GenerateStep({ log, onBack, onNext, testMode }: { log: LogState; onBack
       const pdf = await generatePDF(pdfLog, chartImages, readCategorySettings(), esrResult, { testMode, outOfUse: oouResult })
       setSourceFile('log', pdf)   // the Send step attaches exactly the file that was downloaded
       setDone(true)
+      onNext()                    // straight on to Send: check the PDF there, then send
     } catch (e: any) {
       setError(e.message || 'PDF generation failed')
       // Heuristic date gates may be consciously overridden; the
@@ -2116,8 +2130,8 @@ function GenerateStep({ log, onBack, onNext, testMode }: { log: LogState; onBack
 
       {done && (
         <button onClick={onNext}
-          className="w-full py-2.5 px-4 bg-[#0A0F1E] text-white text-sm font-semibold rounded border border-[#E05206] hover:bg-[rgba(224,82,6,0.15)] transition-colors flex items-center justify-center gap-2">
-          <Mail size={14} /> Checked the log? Continue to Send <ChevronRight size={14} />
+          className="w-full py-3 px-4 bg-[#E05206] text-white text-sm font-bold rounded hover:bg-[#c44804] transition-colors flex items-center justify-center gap-2">
+          <Mail size={16} /> Go to Send: the log is not sent until you send it <ChevronRight size={16} />
         </button>
       )}
 
@@ -2168,6 +2182,25 @@ export default function Home() {
   const [log,  setLog]  = useState<LogState>(BLANK_LOG)
   const [knownNames, setKnownNames] = useState<string[]>([])
   const [testMode, setTestMode] = useTestMode()
+
+  // Has this log been generated, and has it gone to the distribution list?
+  // Generated-but-not-sent is flagged on the step bar, with a reminder bar on
+  // the other steps, and the browser asks before the page is closed or left.
+  const [hasLogPdf, setHasLogPdf] = useState(false)
+  const [sentFor, setSentFor] = useState<string | null>(null)
+  useEffect(() => {
+    const check = () => { const f = getSourceFiles().log; setHasLogPdf(!!f && !/_TEST\.pdf$/i.test(f.name)) }
+    check()
+    return subscribeSourceFiles(check)
+  }, [])
+  const onSentChange = useCallback((sent: boolean) => setSentFor(sent ? log.date : null), [log.date])
+  const sendState: SendState = hasLogPdf && !testMode ? (sentFor === log.date ? 'sent' : 'pending') : 'none'
+  useEffect(() => {
+    if (sendState !== 'pending') return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [sendState])
 
   // Set a default date safely after mount — avoids SSR/client hydration
   // mismatch. Default to the date of the 06:00→06:00 period currently in
@@ -2249,9 +2282,19 @@ export default function Home() {
       {/* Step bar */}
       <div className="border-b border-[rgba(74,111,165,0.15)] bg-[#0F1729]">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3">
-          <StepBar current={step} />
+          <StepBar current={step} send={sendState} />
         </div>
       </div>
+
+      {sendState === 'pending' && step !== 5 && (
+        <div className="bg-[#E05206] text-white sticky top-0 z-30 shadow-lg">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-2 flex items-center gap-3 flex-wrap text-sm font-semibold">
+            <AlertTriangle size={15} className="shrink-0" />
+            <span className="flex-1 min-w-0">The log has been generated but NOT sent to the distribution list.</span>
+            <button onClick={() => setStep(5)} className="px-3 py-1 rounded bg-white text-[#E05206] text-xs font-bold hover:bg-[#FBE3D6]">Go to Send</button>
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
@@ -2267,7 +2310,7 @@ export default function Home() {
             onNext={() => setStep(4)} onBack={() => setStep(2)} />
         )}
         {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} onNext={() => setStep(5)} testMode={testMode} />}
-        {step === 5 && <SendStep log={log} onBack={() => setStep(4)} testMode={testMode} />}
+        {step === 5 && <SendStep log={log} onBack={() => setStep(4)} testMode={testMode} onSentChange={onSentChange} />}
       </main>
 
       <footer className="border-t border-[rgba(74,111,165,0.15)] mt-12">
