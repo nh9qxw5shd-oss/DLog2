@@ -15,7 +15,7 @@ import {
 import type { LogState } from '@/lib/types'
 import { withBase } from '@/lib/basePath'
 import {
-  getSourceFiles, setSourceFile, subscribeSourceFiles, readSenderName, writeSenderName,
+  getSourceFiles, setSourceFile, subscribeSourceFiles, markLogSent, isLogSent, readSenderName, writeSenderName,
   fetchDistributionStatus, sendDailyLog, previewUrl, DistributionStatus, PublicSend, SendResult,
 } from '@/lib/distribution/client'
 import {
@@ -88,6 +88,10 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
     (lastLive.status === 'sending' && Date.now() - new Date(lastLive.createdAt).getTime() > 5 * 60_000)) ? lastLive : undefined
   // Sent, or part-sent: either way a fresh live send needs "send again".
   const alreadySent = liveSends.some(s => s.status === 'sent' || s.status === 'partial')
+  // This PDF reached the whole list (an earlier send for the date may have
+  // carried a different, since-corrected PDF).
+  const thisPdfSent = isLogSent(files.log)
+  const sendRef = useRef<HTMLDivElement>(null)
 
   const pick = (kind: AttachmentKind, f: File | undefined) => {
     setFileError('')
@@ -106,6 +110,7 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
         again: mode === 'live' && again, resumeId, files: Object.fromEntries(kinds.map(k => [k, files[k]!])),
       })
       setResult(r)
+      if (r.ok && mode === 'live' && r.status === 'sent' && files.log) markLogSent(files.log)
     } catch (e: any) {
       setResult({ ok: false, mode, error: e?.message || 'Send failed' })
     } finally {
@@ -142,6 +147,39 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
           Check the generated log, then email it with the forecast and the CCIL export. The list goes by BCC, so nobody can reply to all.
         </p>
       </div>
+
+      {/* Not sent yet: the one thing this step is for, impossible to miss. */}
+      {!testMode && files.log && !isTestPdf(files.log) && status && !thisPdfSent && (
+        <div className="p-5 rounded-lg border-2 border-[#E05206] bg-[rgba(224,82,6,0.12)] space-y-3" role="alert">
+          <p className="text-white text-base font-bold flex items-center gap-2">
+            <AlertTriangle size={18} className="text-[#E05206] shrink-0" />
+            NOT SENT YET: {alreadySent
+              ? `this ${ukDate(log.date)} PDF has not gone to the distribution list`
+              : `the ${ukDate(log.date)} log has not gone to the distribution list`}
+          </p>
+          {alreadySent && (
+            <p className="text-sm text-[#E8D5C8]">
+              An earlier version of this log was sent (see below). If this PDF corrects it, tick &ldquo;send again&rdquo; and send it; otherwise you can leave it.
+            </p>
+          )}
+          <ol className="text-sm text-[#E8D5C8] list-decimal pl-5 space-y-1">
+            <li>Open the log PDF and check it.</li>
+            <li>Enter your name and press <strong>Send to distribution list</strong>.</li>
+          </ol>
+          <div className="flex gap-2 flex-wrap">
+            {logUrl && (
+              <a href={logUrl} target="_blank" rel="noopener noreferrer"
+                className="px-4 py-2 rounded bg-[#0A0F1E] border border-[rgba(74,111,165,0.5)] text-white text-sm font-semibold hover:border-white inline-flex items-center gap-2">
+                <FileText size={14} /> Open the log PDF
+              </a>
+            )}
+            <button onClick={() => sendRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              className="px-4 py-2 rounded bg-[#E05206] text-white text-sm font-semibold hover:bg-[#c44804] inline-flex items-center gap-2">
+              <Send size={14} /> Go to Send
+            </button>
+          </div>
+        </div>
+      )}
 
       {testMode && (
         <div className="flex items-start gap-3 p-4 rounded bg-[rgba(243,156,18,0.12)] border border-[rgba(243,156,18,0.5)]">
@@ -238,7 +276,7 @@ export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () 
       </div>
 
       {/* Sender, test and live send */}
-      <div className="card p-4 space-y-4">
+      <div ref={sendRef} className="card p-4 space-y-4">
         <div className="space-y-1">
           <label className="text-xs text-[#7A8BA8] font-semibold uppercase tracking-wider" htmlFor="sender-name">Your name</label>
           <input id="sender-name" value={name} onChange={e => setName(e.target.value)} onBlur={() => writeSenderName(name)} maxLength={80}
