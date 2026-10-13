@@ -15,7 +15,7 @@ import {
 import type { LogState } from '@/lib/types'
 import { withBase } from '@/lib/basePath'
 import {
-  getSourceFiles, setSourceFile, subscribeSourceFiles, readSenderName, writeSenderName,
+  getSourceFiles, setSourceFile, subscribeSourceFiles, markLogSent, isLogSent, readSenderName, writeSenderName,
   fetchDistributionStatus, sendDailyLog, previewUrl, DistributionStatus, PublicSend, SendResult,
 } from '@/lib/distribution/client'
 import {
@@ -42,13 +42,7 @@ function useSourceFiles() {
   return files
 }
 
-export function SendStep({ log, onBack, testMode, onSentChange }: {
-  log: LogState
-  onBack: () => void
-  testMode: boolean
-  /** Told whether this log has gone to the list, so the page can stop nagging. */
-  onSentChange?: (sent: boolean) => void
-}) {
+export function SendStep({ log, onBack, testMode }: { log: LogState; onBack: () => void; testMode: boolean }) {
   const files = useSourceFiles()
   const [name, setName] = useState('')
   const [testTo, setTestTo] = useState('')
@@ -94,8 +88,9 @@ export function SendStep({ log, onBack, testMode, onSentChange }: {
     (lastLive.status === 'sending' && Date.now() - new Date(lastLive.createdAt).getTime() > 5 * 60_000)) ? lastLive : undefined
   // Sent, or part-sent: either way a fresh live send needs "send again".
   const alreadySent = liveSends.some(s => s.status === 'sent' || s.status === 'partial')
-  const fullySent = liveSends.some(s => s.status === 'sent')
-  useEffect(() => { if (status) onSentChange?.(fullySent) }, [status, fullySent, onSentChange])
+  // This PDF reached the whole list (an earlier send for the date may have
+  // carried a different, since-corrected PDF).
+  const thisPdfSent = isLogSent(files.log)
   const sendRef = useRef<HTMLDivElement>(null)
 
   const pick = (kind: AttachmentKind, f: File | undefined) => {
@@ -115,6 +110,7 @@ export function SendStep({ log, onBack, testMode, onSentChange }: {
         again: mode === 'live' && again, resumeId, files: Object.fromEntries(kinds.map(k => [k, files[k]!])),
       })
       setResult(r)
+      if (r.ok && mode === 'live' && r.status === 'sent' && files.log) markLogSent(files.log)
     } catch (e: any) {
       setResult({ ok: false, mode, error: e?.message || 'Send failed' })
     } finally {
@@ -153,12 +149,19 @@ export function SendStep({ log, onBack, testMode, onSentChange }: {
       </div>
 
       {/* Not sent yet: the one thing this step is for, impossible to miss. */}
-      {!testMode && files.log && !isTestPdf(files.log) && status && !alreadySent && (
+      {!testMode && files.log && !isTestPdf(files.log) && status && !thisPdfSent && (
         <div className="p-5 rounded-lg border-2 border-[#E05206] bg-[rgba(224,82,6,0.12)] space-y-3" role="alert">
           <p className="text-white text-base font-bold flex items-center gap-2">
             <AlertTriangle size={18} className="text-[#E05206] shrink-0" />
-            NOT SENT YET: the {ukDate(log.date)} log has not gone to the distribution list
+            NOT SENT YET: {alreadySent
+              ? `this ${ukDate(log.date)} PDF has not gone to the distribution list`
+              : `the ${ukDate(log.date)} log has not gone to the distribution list`}
           </p>
+          {alreadySent && (
+            <p className="text-sm text-[#E8D5C8]">
+              An earlier version of this log was sent (see below). If this PDF corrects it, tick &ldquo;send again&rdquo; and send it; otherwise you can leave it.
+            </p>
+          )}
           <ol className="text-sm text-[#E8D5C8] list-decimal pl-5 space-y-1">
             <li>Open the log PDF and check it.</li>
             <li>Enter your name and press <strong>Send to distribution list</strong>.</li>

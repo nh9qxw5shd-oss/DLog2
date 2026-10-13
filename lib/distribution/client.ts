@@ -26,6 +26,20 @@ export function getSourceFiles(): Partial<Record<AttachmentKind, File>> {
   return { ...files }
 }
 
+// Which generated PDF has reached the whole list. Tracked by the File itself,
+// not the date: a log corrected and regenerated after an earlier send is a new
+// PDF that has not been sent, and stays flagged until it is.
+let sentLog: File | null = null
+
+export function markLogSent(file: File): void {
+  sentLog = file
+  listeners.forEach(l => l())
+}
+
+export function isLogSent(file: File | null | undefined): boolean {
+  return !!file && file === sentLog
+}
+
 export function subscribeSourceFiles(l: Listener): () => void {
   listeners.add(l)
   return () => { listeners.delete(l) }

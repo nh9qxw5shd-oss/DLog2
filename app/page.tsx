@@ -35,7 +35,7 @@ import { fetchEsrSnapshot, EsrSnapshotResponse, isEsrFresh, parsePastedFeed, NRS
 import { withBase } from '@/lib/basePath'
 import { useTestMode } from '@/lib/testMode'
 import { fetchOutOfUseRegister, subscribeLocalRegister, OouRegister, ago as oouAgo, ragCounts } from '@/lib/outOfUse'
-import { setSourceFile, getSourceFiles, subscribeSourceFiles } from '@/lib/distribution/client'
+import { setSourceFile, getSourceFiles, subscribeSourceFiles, isLogSent } from '@/lib/distribution/client'
 import { SendStep } from './SendStep'
 
 // ─── Hydration-safe clock ─────────────────────────────────────────────────────────
@@ -2186,15 +2186,17 @@ export default function Home() {
   // Has this log been generated, and has it gone to the distribution list?
   // Generated-but-not-sent is flagged on the step bar, with a reminder bar on
   // the other steps, and the browser asks before the page is closed or left.
-  const [hasLogPdf, setHasLogPdf] = useState(false)
-  const [sentFor, setSentFor] = useState<string | null>(null)
+  // Tracked against the PDF itself: a regenerated PDF is unsent until it goes.
+  const [pdfState, setPdfState] = useState<'none' | 'unsent' | 'sent'>('none')
   useEffect(() => {
-    const check = () => { const f = getSourceFiles().log; setHasLogPdf(!!f && !/_TEST\.pdf$/i.test(f.name)) }
+    const check = () => {
+      const f = getSourceFiles().log
+      setPdfState(!f || /_TEST\.pdf$/i.test(f.name) ? 'none' : isLogSent(f) ? 'sent' : 'unsent')
+    }
     check()
     return subscribeSourceFiles(check)
   }, [])
-  const onSentChange = useCallback((sent: boolean) => setSentFor(sent ? log.date : null), [log.date])
-  const sendState: SendState = hasLogPdf && !testMode ? (sentFor === log.date ? 'sent' : 'pending') : 'none'
+  const sendState: SendState = testMode || pdfState === 'none' ? 'none' : pdfState === 'sent' ? 'sent' : 'pending'
   useEffect(() => {
     if (sendState !== 'pending') return
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
@@ -2310,7 +2312,7 @@ export default function Home() {
             onNext={() => setStep(4)} onBack={() => setStep(2)} />
         )}
         {step === 4 && <GenerateStep log={log} onBack={() => setStep(3)} onNext={() => setStep(5)} testMode={testMode} />}
-        {step === 5 && <SendStep log={log} onBack={() => setStep(4)} testMode={testMode} onSentChange={onSentChange} />}
+        {step === 5 && <SendStep log={log} onBack={() => setStep(4)} testMode={testMode} />}
       </main>
 
       <footer className="border-t border-[rgba(74,111,165,0.15)] mt-12">
